@@ -1,0 +1,15 @@
+"0","LDSestim=subset(LDS, select=c(""C.q307_largestPlotType"",""A.q114_socialCategory"",""A.q112_fEdu"",""A.q112_fEdu_new"","""",""M.q702_hhMemAg"",""J.q5601_1herbName"",""D.q410_varName"",""Sowing_Date_Schedule_rating_num"",""G.q5305_irrigTimes_cat""
+
+,""Sowing_Date_Schedule"",""Rabi2017_18"",""Sowing_Date_Early"",""Weedmanual"",""gpw_v4_population_density_rev11_2020_30_sec"",""M.q703_marketSaleShare"",""I.q5512_lodgingPercent"",""I.q5505_weedSeverity_num"",""I.q5509_diseaseSeverity_num"",""I.q5506_insectSeverity_num"",
+                              ""I.q5504_floodSeverity_num"",""I.q5502_droughtSeverity_num"",""I.q5502_droughtSeverity"",""A.q114_socialCategory"",""A.q112_fEdu"",""A.q112_fEdu_new"",""G.q5301_irrigAvail_dum"",""G.q5305_irrigTimes_onevsall"",""G.q5305_irrigTimes_twovs1"",""G.q5305_irrigTimes_threevs1"",""G.q5305_irrigTimes_fourplusvs1"",""PumpEnergySource"",""IrrigSource"",""G.q5305_irrigTimes"",""D.q403_soilPerception""
+,
+                              ""D.q401_soilTexture"",""D.q402_drainClass"",""PrevCropHarvestDayfor1stJan2017_num"",""D.prevCrop_Fallow"",""D.prevCrop_Rice"",""I.q5505_weedSeverity_num"",""L.q607_farmGatePricePerKg"",""L.tonPerHectare"",""C.q306_cropLarestAreaHA"",
+                              ""G.q5305_irrigTimes"",""variety_type_NMWV"",""Nperha"",""NperhaSq"",""Nperha_100belowvsabove"",""Nperha_100belowvs100_150"",""Nperha_100belowvs150_200"",""Nperha_100belowvs200_250"",""Nperha_100belowvs200plus"",
+                              ""P2O5perha"",""A.q111_fGenderdum"",""Weedmanaged"",""Weedherb"",""temp"",""precip"",""wc2.1_30s_elev"",
+                              ""M.q708_marketDistance"",""nitrogen_0.5cm"",""sand_0.5cm"", ""soc_5.15cm"",""O.largestPlotGPS.Longitude"",""O.largestPlotGPS.Latitude"",""A.q103_district"",""temp.2008"",""precip.2008"",""temp.2009"",                               
+                              ""precip.2009"", ""temp.2010"",""precip.2010"",""temp.2011"",""precip.2011"",""temp.2012"",""precip.2012"",""temp.2013"",""precip.2013"",""temp.2014"",""precip.2014"",""temp.2015"",""precip.2015"",""temp.2016"",                                  
+                              ""precip.2016"",""temp.2017"",""precip.2017""))
+"
+"2","Error in `[.data.frame`(x, r, vars, drop = drop) : 
+  undefined columns selected
+"

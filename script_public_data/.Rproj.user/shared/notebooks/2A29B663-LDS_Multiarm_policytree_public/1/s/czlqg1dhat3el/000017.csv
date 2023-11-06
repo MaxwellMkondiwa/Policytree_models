@@ -1,0 +1,3 @@
+"0","library(ggpubr)"
+"0","adoption_all=ggarrange(herb_plot,sow_plot,irrig_plot,variety_plot, ncol = 2,nrow=2)"
+"0","adoption_all"

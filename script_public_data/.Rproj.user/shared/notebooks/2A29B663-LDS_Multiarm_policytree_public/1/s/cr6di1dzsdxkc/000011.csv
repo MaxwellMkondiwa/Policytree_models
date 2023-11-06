@@ -1,0 +1,6 @@
+"0","library(fastDummies)
+LDSestim_Desc=fastDummies::dummy_cols(LDSestim, select_columns=c(""G.q5305_irrigTimes_cat"",""Sowing_Date_Schedule"",""Herbicidename_cat"",""A.q112_fEdu_new""))
+"
+"2","Warning: NOTE: The following select_columns input(s) is not a column in data.
+	"
+"0",""

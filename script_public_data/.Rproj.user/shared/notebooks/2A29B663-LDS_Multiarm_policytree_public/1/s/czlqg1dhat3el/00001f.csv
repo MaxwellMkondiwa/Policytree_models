@@ -1,0 +1,5 @@
+"0","#theme(axis.text = element_text(size = 20,colour = ""black""))+theme(axis.title = element_text(size = 20))"
+"0","ggsave(""figures/WeedMgt_Options_Errorplot.png"")"
+"2",""
+"2","[38;5;232mSaving 7.29 x 4.5 in image[39m"
+"2"," "

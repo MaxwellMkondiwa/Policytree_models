@@ -1,0 +1,22 @@
+"0",""
+"0",""
+"0","# Error bar plots showing yield gains of each of the choices "
+"0",""
+"0","## Weed management options "
+"0","library(ggpubr)"
+"0","library(tidyverse)"
+"0","WeedMgt_Options_Errorplot="
+"0","  LDSestim%>% "
+"0","  drop_na(Herbicidename_cat) %>%"
+"0","  ggerrorplot(x = ""Herbicidename_cat"", y = ""L.tonPerHectare"",add = ""mean"", error.plot = ""errorbar"", color=""black"",size=1,ggtheme=theme_bw())+"
+"0","  labs(x=""Weed management options"",y=""Wheat yield (t/ha)"")+"
+"0","  theme_bw(base_size = 16)+coord_flip()"
+"2","Warning: The `fun.y` argument of `stat_summary()` is deprecated as of ggplot2 3.3.0.
+Please use the `fun` argument instead."
+"2","Warning: The `fun.ymin` argument of `stat_summary()` is deprecated as of ggplot2 3.3.0.
+Please use the `fun.min` argument instead."
+"2","Warning: The `fun.ymax` argument of `stat_summary()` is deprecated as of ggplot2 3.3.0.
+Please use the `fun.max` argument instead."
+"0","WeedMgt_Options_Errorplot+"
+"0","  aes(x = fct_reorder(Herbicidename_cat, L.tonPerHectare))+"
+"0"," xlab(""Weed management options"")"
