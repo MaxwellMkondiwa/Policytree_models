@@ -1,0 +1,25 @@
+---
+title: "Untitled"
+format: html
+---
+
+```{r}
+library(remotes)
+
+remotes::install_github("reagro/wow")
+
+library(wow)
+
+path="C:/Users/MMKONDIWA/OneDrive - CIMMYT/Documents/GitHub/Policytree_models/script_public_data"
+wow::run_workflow()
+
+make_flow(path)
+
+run_flow(repo="causal_RF_targeting",org="EiA2030-ex-ante")
+
+
+
+# Carobiner
+
+remotes::install_github("reagro/carobiner")
+ff <- carobiner::make_carob(path)
