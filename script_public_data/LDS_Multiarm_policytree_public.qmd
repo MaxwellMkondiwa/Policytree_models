@@ -766,7 +766,11 @@ The causal random forest results need to be checked for fit. However, there is n
  # Calibration check: Multi-arm causal RF does not yet calibration check
  ## We use binary causal RF to do that
  
-W_cf_irrig_binary=as.vector(LDSestim_sow$irrig_Date_Early) 
+LDSestim_irrig$G.q5305_irrigTimes_three_plus[LDSestim_irrig$G.q5305_irrigTimes_cat%in%c("Three","Fourplus")]=1
+
+LDSestim_irrig$G.q5305_irrigTimes_three_plus[LDSestim_irrig$G.q5305_irrigTimes_cat%in%c("One","Two")]=0
+
+W_cf_irrig_binary=as.vector(LDSestim_sow$G.q5305_irrigTimes_three_plus) 
 
 # Probability random forest to create weights
 W.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, W_cf_irrig_binary,
@@ -919,6 +923,55 @@ library(DiagrammeRsvg)
 
 
 ```
+
+
+
+## Binary causal RF calibration check
+
+The causal random forest results need to be checked for fit. However, there is no available algorithm to check this for the mult-arm causal RF. We therefore rely on the binary causal RF. Mean and differential forest prediction calibrations are used for such purposes. A coefficient of 1 for mean forest prediction suggests that the mean forest prediction is correct while a coefficient of 1 for differential forest prediction suggests that the forest has captured heterogeneity in the underlying signal (Tibshirani et al 2022). The following code fits the binary.
+
+```{r}
+ # Calibration check: Multi-arm causal RF does not yet calibration check
+ ## We use binary causal RF to do that
+ 
+W_cf_variety_binary=as.vector(LDSestim_variety$variety_type_NMWV) 
+
+# Probability random forest to create weights
+W.multi_variety.forest_binary <- regression_forest(X_cf_variety, W_cf_variety_binary,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_variety_binary <- predict(W.multi_variety.forest_binary, estimate.variance = TRUE)$predictions
+
+
+# Regression forest to get expected responses 
+Y.multi_variety.forest_binary <- regression_forest(X_cf_variety, Y_cf_variety,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_variety.forest_binary)
+varimp.multi_variety_binary <- variable_importance(Y.multi_variety.forest_binary)
+
+Y.hat.multi.all_variety_binary <- predict(Y.multi_variety.forest_binary, estimate.variance = TRUE)$predictions
+
+# Fit binary causal RF model
+multi_variety.forest_binary <- causal_forest(X = X_cf_variety, Y = Y_cf_variety, W = W_cf_variety_binary ,W.hat=W.hat.multi.all_variety_binary,Y.hat=Y.hat.multi.all_variety_binary,seed=2) 
+
+varimp.multi_variety_cf_binary <- variable_importance(multi_variety.forest_binary)
+
+# Average treatment effects
+multi_variety_ate_binary=average_treatment_effect(multi_variety.forest_binary,target.sample = "overlap")
+multi_variety_ate_binary
+
+multi_variety_binary_calibration=test_calibration(multi_variety.forest_binary)
+multi_variety_binary_calibration
+```
+
+
+
+
+
 
 # Mapping and cross targeting
 
