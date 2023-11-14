@@ -14,7 +14,7 @@ run_flow <- function(path=NULL, repo, org="", skip=0) {
 	if (!is.null(path)) {
 		f <- file.path(path, "run.R")
 	} else {
-		f <- file.path("https://raw.githubusercontent.com", org, repo, "main/run.R")
+  f <- file.path("https://github.com/", org, repo, "main/run.R")
 	}
 	x <- readLines(f)
 	if (skip > 0) {
