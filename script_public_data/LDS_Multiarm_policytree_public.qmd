@@ -775,8 +775,7 @@ W_cf_irrig_binary=as.vector(LDSestim_sow$G.q5305_irrigTimes_three_plus)
 # Probability random forest to create weights
 W.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, W_cf_irrig_binary,
   equalize.cluster.weights = FALSE,
-  seed = 2
-)
+  seed = 2)
 W.hat.multi.all_irrig_binary <- predict(W.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
 
 
