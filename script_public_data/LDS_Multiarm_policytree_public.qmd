@@ -585,12 +585,6 @@ varimpplotRF_sowing=ggplot(varimpvars_sowing,aes(x=reorder(vars_sowing,Variablei
  ggsave("figures/varimpplotRF_sowing.png",dpi=300)
 
 
-
-
-
-
-
-
 # Policy tree --------------------------------------
 DR.scores_sowing <- double_robust_scores(multi_sowing.forest)
 
@@ -617,6 +611,8 @@ table(tr_assignment_sowing$depth4)
 
 
 ```
+
+
 
 # Irrigation management
 
@@ -961,7 +957,6 @@ tr_assignment_varietyspmapview
 ## Weed management
 
 ```{r}
-setwd("D:/OneDrive/CIMMYT/Papers/IO5.3.1.CropResponseModels/WheatResponse/Policytree_Models")
 library(ggplot2)
 library(ggridges)
 library(reshape2)
@@ -1143,6 +1138,63 @@ ggsave("figures/multi_variety_tau_dist.png")
 
 ```
 
+# Simple maximum yield treatment assignment
+
+## Weed management
+Given the individual farm level yield gains to each of the sowing date categories, we can simply determine which of these gives the highest predicted yield gains for each farmer. To get these, we simply index the maximum sowing date. We then map this across space.
+
+```{r}
+library(rgdal)
+tau.multi_herb.forest_pred$max_yield_gain_name=colnames(tau.multi_herb.forest_pred)[max.col(tau.multi_herb.forest_pred)]
+
+table(tau.multi_herb.forest_pred$max_yield_gain_name)
+
+tau.multi_herb.forest_pred$max_yield_gain<- pmax(tau.multi_herb.forest_pred$`T1_10Nov-T5_16Dec`,tau.multi_herb.forest_pred$`T2_20Nov-T5_16Dec`,tau.multi_herb.forest_pred$`T3_30Nov-T5_16Dec`,tau.multi_herb.forest_pred$`T4_15Dec - T5_16Dec`)
+
+simple_tr_assignment_herb=cbind(LDSestim_sow,tau.multi_herb.forest_pred)
+
+simple_tr_assignment_herbsp= SpatialPointsDataFrame(cbind(simple_tr_assignment_herb$O.largestPlotGPS.Longitude,simple_tr_assignment_herb$O.largestPlotGPS.Latitude),data=simple_tr_assignment_herb,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+simple_tr_assignment_herbspmapview=mapview(simple_tr_assignment_herbsp,zcol="max_yield_gain_name",layer.name="Recommended weed management")
+simple_tr_assignment_herbspmapview
+
+
+```
+
+## Sowing
+
+```{r}
+library(rgdal)
+tau.multi_sowing.forest_pred$max_yield_gain_name=colnames(tau.multi_sowing.forest_pred)[max.col(tau.multi_sowing.forest_pred)]
+
+table(tau.multi_sowing.forest_pred$max_yield_gain_name)
+
+tau.multi_sowing.forest_pred$max_yield_gain<- pmax(tau.multi_sowing.forest_pred$`T1_10Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T2_20Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T3_30Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T4_15Dec - T5_16Dec`)
+
+simple_tr_assignment_sowing=cbind(LDSestim_sow,tau.multi_sowing.forest_pred)
+
+simple_tr_assignment_sowingsp= SpatialPointsDataFrame(cbind(simple_tr_assignment_sowing$O.largestPlotGPS.Longitude,simple_tr_assignment_sowing$O.largestPlotGPS.Latitude),data=simple_tr_assignment_sowing,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+simple_tr_assignment_sowingspmapview=mapview(simple_tr_assignment_sowingsp,zcol="max_yield_gain_name",layer.name="Recommended sowing dates")
+simple_tr_assignment_sowingspmapview
+
+
+```
+
+## Yield gains to simple optimal choice
+
+```{r}
+
+simple_tr_assignment_sowingspmapview_yield=mapview(simple_tr_assignment_sowingsp,zcol="T1_10Nov-T5_16Dec",layer.name="Recommended sowing dates")
+simple_tr_assignment_sowingspmapview_yield
+```
+
+
+
 # Status quo to optimal shares: Transitions
 
 ```{r}
@@ -1313,24 +1365,6 @@ ggsave("figures/transitionmatrixplot_variety.png", dpi = 300)
 
 
 ```
-
-# Quantile based prioritizing of yield gains
-
-#Irrigation
-```{r}
-
-
-tr_assignment_irrig_tau_pred=cbind(tr_assignment_irrig,tau.multi_irrig.forest_pred)
-
-
-
-
-```
-
-
-
-
-
 
 
 
