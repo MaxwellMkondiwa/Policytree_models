@@ -522,7 +522,7 @@ table(tr_assignment_herb$depth4)
 library(grf)
 library(policytree)
 
-LDSestim_sow=subset(LDSestim, select=c("Sowing_Date_Schedule","L.tonPerHectare","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num",                                       "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+LDSestim_sow=subset(LDSestim, select=c("Sowing_Date_Early","Sowing_Date_Schedule","L.tonPerHectare","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num",                                       "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
                                                        "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude"))
 
 library(tidyr)
@@ -612,7 +612,46 @@ table(tr_assignment_sowing$depth4)
 
 ```
 
+## Binary causal RF calibration check
 
+The causal random forest results need to be checked for fit. However, there is no available algorithm to check this for the mult-arm causal RF. We therefore rely on the binary causal RF. Mean and differential forest prediction calibrations are used for such purposes. A coefficient of 1 for mean forest prediction suggests that the mean forest prediction is correct while a coefficient of 1 for differential forest prediction suggests that the forest has captured heterogeneity in the underlying signal (Tibshirani et al 2022). The following code fits the binary.
+
+```{r}
+ # Calibration check: Multi-arm causal RF does not yet calibration check
+ ## We use binary causal RF to do that
+ 
+W_cf_sowing_binary=as.vector(LDSestim_sow$Sowing_Date_Early) 
+
+# Probability random forest to create weights
+W.multi_sowing.forest_binary <- regression_forest(X_cf_sowing, W_cf_sowing_binary,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_sowing_binary <- predict(W.multi_sowing.forest_binary, estimate.variance = TRUE)$predictions
+
+
+# Regression forest to get expected responses 
+Y.multi_sowing.forest_binary <- regression_forest(X_cf_sowing, Y_cf_sowing,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_sowing.forest_binary)
+varimp.multi_sowing_binary <- variable_importance(Y.multi_sowing.forest_binary)
+Y.hat.multi.all_sowing_binary <- predict(Y.multi_sowing.forest_binary, estimate.variance = TRUE)$predictions
+
+# Fit binary causal RF model
+multi_sowing.forest_binary <- causal_forest(X = X_cf_sowing, Y = Y_cf_sowing, W = W_cf_sowing_binary ,W.hat=W.hat.multi.all_sowing_binary,Y.hat=Y.hat.multi.all_sowing_binary,seed=2) 
+
+varimp.multi_sowing_cf_binary <- variable_importance(multi_sowing.forest_binary)
+
+# Average treatment effects
+multi_sowing_ate_binary=average_treatment_effect(multi_sowing.forest_binary,target.sample = "overlap")
+multi_sowing_ate_binary
+
+multi_sowing_binary_calibration=test_calibration(multi_sowing.forest_binary)
+multi_sowing_binary_calibration
+```
 
 # Irrigation management
 
@@ -719,6 +758,48 @@ table(tr_assignment_irrig$depth4)
 
 
 ```
+## Binary causal RF calibration check
+
+The causal random forest results need to be checked for fit. However, there is no available algorithm to check this for the mult-arm causal RF. We therefore rely on the binary causal RF. Mean and differential forest prediction calibrations are used for such purposes. A coefficient of 1 for mean forest prediction suggests that the mean forest prediction is correct while a coefficient of 1 for differential forest prediction suggests that the forest has captured heterogeneity in the underlying signal (Tibshirani et al 2022). The following code fits the binary.
+
+```{r}
+ # Calibration check: Multi-arm causal RF does not yet calibration check
+ ## We use binary causal RF to do that
+ 
+W_cf_irrig_binary=as.vector(LDSestim_sow$irrig_Date_Early) 
+
+# Probability random forest to create weights
+W.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, W_cf_irrig_binary,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_irrig_binary <- predict(W.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
+
+
+# Regression forest to get expected responses 
+Y.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, Y_cf_irrig,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_irrig.forest_binary)
+varimp.multi_irrig_binary <- variable_importance(Y.multi_irrig.forest_binary)
+Y.hat.multi.all_irrig_binary <- predict(Y.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
+
+# Fit binary causal RF model
+multi_irrig.forest_binary <- causal_forest(X = X_cf_irrig, Y = Y_cf_irrig, W = W_cf_irrig_binary ,W.hat=W.hat.multi.all_irrig_binary,Y.hat=Y.hat.multi.all_irrig_binary,seed=2) 
+
+varimp.multi_irrig_cf_binary <- variable_importance(multi_irrig.forest_binary)
+
+# Average treatment effects
+multi_irrig_ate_binary=average_treatment_effect(multi_irrig.forest_binary,target.sample = "overlap")
+multi_irrig_ate_binary
+
+multi_irrig_binary_calibration=test_calibration(multi_irrig.forest_binary)
+multi_irrig_binary_calibration
+```
+
+
 
 # Varieties
 
@@ -1147,11 +1228,13 @@ Given the individual farm level yield gains to each of the sowing date categorie
 library(rgdal)
 tau.multi_herb.forest_pred$max_yield_gain_name=colnames(tau.multi_herb.forest_pred)[max.col(tau.multi_herb.forest_pred)]
 
+tau.multi_herb.forest_pred$max_yield_gain_name[tau.multi_herb.forest_pred$max_yield_gain<0]="No weeding"
+
 table(tau.multi_herb.forest_pred$max_yield_gain_name)
 
-tau.multi_herb.forest_pred$max_yield_gain<- pmax(tau.multi_herb.forest_pred$`T1_10Nov-T5_16Dec`,tau.multi_herb.forest_pred$`T2_20Nov-T5_16Dec`,tau.multi_herb.forest_pred$`T3_30Nov-T5_16Dec`,tau.multi_herb.forest_pred$`T4_15Dec - T5_16Dec`)
+tau.multi_herb.forest_pred$max_yield_gain<- pmax(tau.multi_herb.forest_pred$`Manual-No weeding`,tau.multi_herb.forest_pred$`Manual_herb-No weeding`,tau.multi_herb.forest_pred$`2,4-D -No weeding`,tau.multi_herb.forest_pred$`SulfosulfuronMetsulfuron-No weeding`)
 
-simple_tr_assignment_herb=cbind(LDSestim_sow,tau.multi_herb.forest_pred)
+simple_tr_assignment_herb=cbind(LDSestim_herb,tau.multi_herb.forest_pred)
 
 simple_tr_assignment_herbsp= SpatialPointsDataFrame(cbind(simple_tr_assignment_herb$O.largestPlotGPS.Longitude,simple_tr_assignment_herb$O.largestPlotGPS.Latitude),data=simple_tr_assignment_herb,proj4string=CRS("+proj=longlat +datum=WGS84"))
 
@@ -1173,6 +1256,10 @@ table(tau.multi_sowing.forest_pred$max_yield_gain_name)
 
 tau.multi_sowing.forest_pred$max_yield_gain<- pmax(tau.multi_sowing.forest_pred$`T1_10Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T2_20Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T3_30Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T4_15Dec - T5_16Dec`)
 
+tau.multi_sowing.forest_pred$max_yield_gain_name[tau.multi_sowing.forest_pred$max_yield_gain<0]="T5"
+
+
+
 simple_tr_assignment_sowing=cbind(LDSestim_sow,tau.multi_sowing.forest_pred)
 
 simple_tr_assignment_sowingsp= SpatialPointsDataFrame(cbind(simple_tr_assignment_sowing$O.largestPlotGPS.Longitude,simple_tr_assignment_sowing$O.largestPlotGPS.Latitude),data=simple_tr_assignment_sowing,proj4string=CRS("+proj=longlat +datum=WGS84"))
@@ -1185,7 +1272,7 @@ simple_tr_assignment_sowingspmapview
 
 ```
 
-## Yield gains to simple optimal choice
+### Yield gains to simple optimal choice
 
 ```{r}
 
@@ -1193,6 +1280,74 @@ simple_tr_assignment_sowingspmapview_yield=mapview(simple_tr_assignment_sowingsp
 simple_tr_assignment_sowingspmapview_yield
 ```
 
+## Irrigation
+
+```{r}
+library(rgdal)
+tau.multi_irrig.forest_pred$max_yield_gain_name=colnames(tau.multi_irrig.forest_pred)[max.col(tau.multi_irrig.forest_pred)]
+
+table(tau.multi_irrig.forest_pred$max_yield_gain_name)
+
+tau.multi_irrig.forest_pred$max_yield_gain<- pmax(tau.multi_irrig.forest_pred$`Two-One`,tau.multi_irrig.forest_pred$`Three-One`,tau.multi_irrig.forest_pred$`Four-One`)
+
+tau.multi_irrig.forest_pred$max_yield_gain_name[tau.multi_irrig.forest_pred$max_yield_gain<0]="Three"
+
+tau.multi_irrig.forest_pred$max_yield_gain_name[tau.multi_irrig.forest_pred$max_yield_gain_name=="Four-One"]="Four"
+
+simple_tr_assignment_irrig=cbind(LDSestim_irrig,tau.multi_irrig.forest_pred)
+
+simple_tr_assignment_irrigsp= SpatialPointsDataFrame(cbind(simple_tr_assignment_irrig$O.largestPlotGPS.Longitude,simple_tr_assignment_irrig$O.largestPlotGPS.Latitude),data=simple_tr_assignment_irrig,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+simple_tr_assignment_irrigspmapview=mapview(simple_tr_assignment_irrigsp,zcol="max_yield_gain_name",layer.name="Recommended irrigation amounts")
+simple_tr_assignment_irrigspmapview
+
+
+```
+
+### Yield gains to simple optimal choice
+
+```{r}
+
+simple_tr_assignment_irrigspmapview_yield=mapview(simple_tr_assignment_irrigsp,zcol="max_yield_gain",layer.name="Recommended irrig dates")
+simple_tr_assignment_irrigspmapview_yield
+```
+
+## Varieties
+
+```{r}
+library(rgdal)
+tau.multi_variety.forest_pred$max_yield_gain_name=colnames(tau.multi_variety.forest_pred)[max.col(tau.multi_variety.forest_pred)]
+
+tau.multi_variety.forest_pred$max_yield_gain<- pmax(tau.multi_variety.forest_pred$`Local-HD2967`,tau.multi_variety.forest_pred$`PBW343-HD2967`,tau.multi_variety.forest_pred$`UP262-HD2967`,tau.multi_variety.forest_pred$`LOK1-HD2967`,tau.multi_variety.forest_pred$`PBW154-HD2967`,tau.multi_variety.forest_pred$`Kedar-HD2967`,tau.multi_variety.forest_pred$`SUPER303-HD2967`,tau.multi_variety.forest_pred$`PBW502-HD2967`,tau.multi_variety.forest_pred$`HD2733-HD2967`,tau.multi_variety.forest_pred$`HUW234-HD2967`)
+
+
+tau.multi_variety.forest_pred$max_yield_gain_name[tau.multi_variety.forest_pred$max_yield_gain<0]="HD-2967"
+
+tau.multi_variety.forest_pred$max_yield_gain_name[tau.multi_variety.forest_pred$max_yield_gain_name=="SUPER303-HD2967"]="SUPER303"
+table(tau.multi_variety.forest_pred$max_yield_gain_name)
+
+
+simple_tr_assignment_variety=cbind(LDSestim_variety,tau.multi_variety.forest_pred)
+
+simple_tr_assignment_varietysp= SpatialPointsDataFrame(cbind(simple_tr_assignment_variety$O.largestPlotGPS.Longitude,simple_tr_assignment_variety$O.largestPlotGPS.Latitude),data=simple_tr_assignment_variety,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+simple_tr_assignment_varietyspmapview=mapview(simple_tr_assignment_varietysp,zcol="max_yield_gain_name",layer.name="Recommended variety")
+simple_tr_assignment_varietyspmapview
+
+
+```
+
+### Yield gains to simple optimal choice
+
+```{r}
+
+simple_tr_assignment_varietyspmapview_yield=mapview(simple_tr_assignment_varietysp,zcol="max_yield_gain",layer.name="Yield gain:SUPER 303-HD 2967")
+simple_tr_assignment_varietyspmapview_yield
+```
 
 
 # Status quo to optimal shares: Transitions
