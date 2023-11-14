@@ -11,11 +11,13 @@ remotes::install_github("reagro/wow")
 library(wow)
 
 path="C:/Users/MMKONDIWA/OneDrive - CIMMYT/Documents/GitHub/Policytree_models/script_public_data"
-wow::run_workflow()
+
+path2="https://vscode.dev/tunnel/cim-in-7y119k3/c:/Users/MMKONDIWA/OneDrive - CIMMYT/Documents/GitHub/Policytree_models"
+
 
 make_flow(path)
 
-run_flow(repo="causal_RF_targeting",org="EiA2030-ex-ante")
+run_flow(repo = "MaxwellMkondiwa/Policytree_models/blob/")
 
 
 
