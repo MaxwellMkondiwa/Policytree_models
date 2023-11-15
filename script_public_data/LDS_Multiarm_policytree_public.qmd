@@ -766,41 +766,41 @@ The causal random forest results need to be checked for fit. However, there is n
  # Calibration check: Multi-arm causal RF does not yet calibration check
  ## We use binary causal RF to do that
  
-LDSestim_irrig$G.q5305_irrigTimes_three_plus[LDSestim_irrig$G.q5305_irrigTimes_cat%in%c("Three","Fourplus")]=1
-
-LDSestim_irrig$G.q5305_irrigTimes_three_plus[LDSestim_irrig$G.q5305_irrigTimes_cat%in%c("One","Two")]=0
-
-W_cf_irrig_binary=as.vector(LDSestim_sow$G.q5305_irrigTimes_three_plus) 
-
-# Probability random forest to create weights
-W.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, W_cf_irrig_binary,
-  equalize.cluster.weights = FALSE,
-  seed = 2)
-
-W.hat.multi.all_irrig_binary <- predict(W.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
-
-
-# Regression forest to get expected responses 
-Y.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, Y_cf_irrig,
-  equalize.cluster.weights = FALSE,
-  seed = 2
-)
-
-print(Y.multi_irrig.forest_binary)
-varimp.multi_irrig_binary <- variable_importance(Y.multi_irrig.forest_binary)
-Y.hat.multi.all_irrig_binary <- predict(Y.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
-
-# Fit binary causal RF model
-multi_irrig.forest_binary <- causal_forest(X = X_cf_irrig, Y = Y_cf_irrig, W = W_cf_irrig_binary ,W.hat=W.hat.multi.all_irrig_binary,Y.hat=Y.hat.multi.all_irrig_binary,seed=2) 
-
-varimp.multi_irrig_cf_binary <- variable_importance(multi_irrig.forest_binary)
-
-# Average treatment effects
-multi_irrig_ate_binary=average_treatment_effect(multi_irrig.forest_binary,target.sample = "overlap")
-multi_irrig_ate_binary
-
-multi_irrig_binary_calibration=test_calibration(multi_irrig.forest_binary)
-multi_irrig_binary_calibration
+# LDSestim_irrig$G.q5305_irrigTimes_three_plus[LDSestim_irrig$G.q5305_irrigTimes_cat%in%c("Three","Fourplus")]=1
+# 
+# LDSestim_irrig$G.q5305_irrigTimes_three_plus[LDSestim_irrig$G.q5305_irrigTimes_cat%in%c("One","Two")]=0
+# 
+# W_cf_irrig_binary=as.vector(LDSestim_sow$G.q5305_irrigTimes_three_plus) 
+# 
+# # Probability random forest to create weights
+# W.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, W_cf_irrig_binary,
+#   equalize.cluster.weights = FALSE,
+#   seed = 2)
+# 
+# W.hat.multi.all_irrig_binary <- predict(W.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
+# 
+# 
+# # Regression forest to get expected responses 
+# Y.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, Y_cf_irrig,
+#   equalize.cluster.weights = FALSE,
+#   seed = 2
+# )
+# 
+# print(Y.multi_irrig.forest_binary)
+# varimp.multi_irrig_binary <- variable_importance(Y.multi_irrig.forest_binary)
+# Y.hat.multi.all_irrig_binary <- predict(Y.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
+# 
+# # Fit binary causal RF model
+# multi_irrig.forest_binary <- causal_forest(X = X_cf_irrig, Y = Y_cf_irrig, W = W_cf_irrig_binary ,W.hat=W.hat.multi.all_irrig_binary,Y.hat=Y.hat.multi.all_irrig_binary,seed=2) 
+# 
+# varimp.multi_irrig_cf_binary <- variable_importance(multi_irrig.forest_binary)
+# 
+# # Average treatment effects
+# multi_irrig_ate_binary=average_treatment_effect(multi_irrig.forest_binary,target.sample = "overlap")
+# multi_irrig_ate_binary
+# 
+# multi_irrig_binary_calibration=test_calibration(multi_irrig.forest_binary)
+# multi_irrig_binary_calibration
 ```
 
 
