@@ -1,0 +1,1768 @@
+---
+title: "Multi-armed bandit policy targeting of agronomic practices"
+format: html
+fig-dpi: 300
+fig-width: 8.88
+fig-align: center
+fig-height: 5
+
+self-contained: true
+author: Maxwell Mkondiwa
+editor: visual
+toc: true
+toc-location: left
+number-sections: true
+execute: 
+  message: false
+  warning: false
+  echo: true
+---
+
+
+# Introduction
+
+In this notebook, I use a causal machine learning estimator, i.e., multi-armed causal random forest with augmented inverse propensity score weights (Athey et al 2019), to estimate conditional average treatment effects (CATES) for agronomic practices. These CATEs are estimated for each individual farm thereby providing personalized estimates of the potential effectiveness of the practices. I then use a debiased robust estimator in a policy tree optimization (Athey and Wager 2021) to generate optimal recommendations in the form of agronomic practices that maximize potential yield gains.
+
+
+```{r}
+#rm(list=ls())
+set.seed(2)
+# Packages --------------------
+library(sp)
+library(rgdal)
+library(dplyr)
+library(rio)
+library(readxl)
+library(rgdal)
+library(sf)
+library(ggplot2)
+library(grf)
+library(mapview)
+library(forcats)
+library(bbplot)
+suppressMessages(library(mapview))
+
+load("LDS_Public_Workspace.RData")
+
+LDS$Sowing_Date_Schedule_rating_num[LDS$Sowing_Date_Schedule=="T5_16Dec"]=1
+LDS$Sowing_Date_Schedule_rating_num[LDS$Sowing_Date_Schedule=="T4_15Dec"]=2
+LDS$Sowing_Date_Schedule_rating_num[LDS$Sowing_Date_Schedule=="T3_30Nov"]=3
+LDS$Sowing_Date_Schedule_rating_num[LDS$Sowing_Date_Schedule=="T2_20Nov"]=4
+LDS$Sowing_Date_Schedule_rating_num[LDS$Sowing_Date_Schedule=="T1_10Nov"]=5
+
+LDS$Sowing_Date_Schedule=ordered(LDS$Sowing_Date_Schedule,levels=c("T5_16Dec","T4_15Dec","T3_30Nov","T2_20Nov","T1_10Nov"))
+
+# Select variables needed for the analysis -----------------------------
+LDSestim=subset(LDS, select=c("C.q307_largestPlotType","A.q114_socialCategory","M.q702_hhMemAg","J.q5601_1herbName","D.q410_varName","Sowing_Date_Schedule_rating_num","G.q5305_irrigTimes_cat"
+
+,"Sowing_Date_Schedule","Rabi2017_18","Sowing_Date_Early","Weedmanual","gpw_v4_population_density_rev11_2020_30_sec","M.q703_marketSaleShare","I.q5512_lodgingPercent","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num",
+                              "I.q5504_floodSeverity_num","I.q5502_droughtSeverity_num","I.q5502_droughtSeverity","A.q114_socialCategory","A.q112_fEdu","A.q112_fEdu_new","G.q5301_irrigAvail_dum","G.q5305_irrigTimes_onevsall","G.q5305_irrigTimes_twovs1","G.q5305_irrigTimes_threevs1","G.q5305_irrigTimes_fourplusvs1","PumpEnergySource","IrrigSource","G.q5305_irrigTimes","D.q403_soilPerception"
+,
+                              "D.q401_soilTexture","D.q402_drainClass","PrevCropHarvestDayfor1stJan2017_num","D.prevCrop_Fallow","D.prevCrop_Rice","I.q5505_weedSeverity_num","L.q607_farmGatePricePerKg","L.tonPerHectare","C.q306_cropLarestAreaHA",
+                              "G.q5305_irrigTimes","variety_type_NMWV","Nperha","NperhaSq","Nperha_100belowvsabove","Nperha_100belowvs100_150","Nperha_100belowvs150_200","Nperha_100belowvs200_250","Nperha_100belowvs200plus",
+                              "P2O5perha","A.q111_fGenderdum","Weedmanaged","Weedherb","temp","precip","wc2.1_30s_elev",
+                              "M.q708_marketDistance","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Longitude","O.largestPlotGPS.Latitude","A.q103_district","temp.2008","precip.2008","temp.2009",                               
+                              "precip.2009", "temp.2010","precip.2010","temp.2011","precip.2011","temp.2012","precip.2012","temp.2013","precip.2013","temp.2014","precip.2014","temp.2015","precip.2015","temp.2016",                                  
+                              "precip.2016","temp.2017","precip.2017"))
+
+
+# Socio-economic variables 
+LDSestim$A.q112_fEdu_new_num[LDSestim$A.q112_fEdu_new=="noSchooling"]=0
+LDSestim$A.q112_fEdu_new_num[LDSestim$A.q112_fEdu_new=="primary"]=1
+LDSestim$A.q112_fEdu_new_num[LDSestim$A.q112_fEdu_new=="matriculation"]=2
+LDSestim$A.q112_fEdu_new_num[LDSestim$A.q112_fEdu_new=="seniorSecondary"]=3
+LDSestim$A.q112_fEdu_new_num[LDSestim$A.q112_fEdu_new=="bachelors"]=4
+LDSestim$A.q112_fEdu_new_num[LDSestim$A.q112_fEdu_new=="Postgrad"]=5
+
+LDSestim$Caste_marginalized[LDSestim$A.q114_socialCategory=="General"]=0
+LDSestim$Caste_marginalized[LDSestim$A.q114_socialCategory%in%c("OBC","Other","SC","ST")]=1
+
+LDSestim$Plot_owned[LDSestim$C.q307_largestPlotType=="Owned"]=1
+LDSestim$Plot_owned[LDSestim$C.q307_largestPlotType%in%c("FarmedContract","Leased")]=0
+
+
+
+
+
+## Herbicides cleaning -----------------------
+
+LDSestim$J.q5601_1herbName_2=gsub("([^A-Za-z0-9 ])+","", LDSestim$J.q5601_1herbName)
+
+LDSestim$J.q5601_1herbName_2=as.character(LDSestim$J.q5601_1herbName_2)
+LDSestim$J.q5601_1herbName_2[LDSestim$J.q5601_1herbName_2==""]="NA"
+
+table(LDSestim$J.q5601_1herbName_2)
+
+LDSestim$Herbicidename="NA"
+LDSestim$Herbicidename[LDSestim$J.q5601_1herbName_2%in%c("2  4 D","2 4 d","2-4 D","2 4 D","2 4d","2 4D","24 D","24d","2D","34D","hera","Hera","24D")]="2,4-D"
+
+LDSestim$Herbicidename[LDSestim$J.q5601_1herbName_2%in%c("SulfosulfuronMetsulfuron","SulfosulfuronMetsulfuron")]="SulfosulfuronMetsulfuron"
+
+LDSestim$Herbicidename[LDSestim$J.q5601_1herbName_2%in%c("CarfentrazoneSulfosulfuron","Carfentrazone")]="Carfentrazone"
+
+
+
+# Metsulfuron -----------
+LDSestim$Herbicidename[LDSestim$J.q5601_1herbName_2%in%c("Metsu","MetsulfuronClodinafop","Metsulfuronsulfosulfuron","Metsulfuron")]="Metsulfuron"
+
+#Sulfusulfuran ---------------------------
+
+LDSestim$Herbicidename[LDSestim$J.q5601_1herbName_2%in%c("Leader","Sufosulfuran","Sulfosufuran","Sulfosulfuran","Sulfosulfuron")]="Sulfosulfuron"
+
+LDSestim$Herbicidename[LDSestim$J.q5601_1herbName_2%in%c("Pendimethalin","Pendimethillin","Pendia","Penida","Stomp","Pendimethalin")]="Pendimethalin"
+
+LDSestim$Herbicidename[LDSestim$J.q5601_1herbName_2%in%c("TOTAL","Totak","total","Tal","Total")]="Total"
+
+LDSestim$Herbicidename[LDSestim$J.q5601_1herbName_2%in%c("unknown","Unknown")]="Unknown"
+
+LDSestim$Herbicidename[LDSestim$Weedmanual==1 & LDSestim$Weedherb==1]="Manual_herb"
+LDSestim$Herbicidename[LDSestim$Weedmanual==1 & LDSestim$Weedherb==0]="Manual"
+
+LDSestim$Herbicidename[is.na(LDSestim$J.q5601_1herbName_2) & LDSestim$Weedherb==1]="Unknown"
+LDSestim$Herbicidename[LDSestim$Weedmanaged==0]="None"
+LDSestim$Herbicidename[is.na(LDSestim$J.q5601_1herbName_2) & LDSestim$Weedherb==0 & LDSestim$Weedmanual==0]="None"
+
+table(LDSestim$Herbicidename,LDSestim$Weedherb) # There are some observations where herbicide times is 0 but they recorded the herbicide name. We treated these as no herbicide application
+
+table(LDSestim$J.q5601_1herbName_2,LDSestim$Weedherb)
+
+
+LDSestim$Herbicidename_cat=NA
+
+LDSestim$Herbicidename_cat[LDSestim$Herbicidename=="None"]="No weeding"
+LDSestim$Herbicidename_cat[LDSestim$Herbicidename=="2,4-D"]="2,4-D"
+LDSestim$Herbicidename_cat[LDSestim$Herbicidename=="Manual"]="Manual"
+LDSestim$Herbicidename_cat[LDSestim$Herbicidename=="Manual_herb"]="Manual_herb"
+
+LDSestim$Herbicidename_cat[LDSestim$Herbicidename%in%c("SulfosulfuronMetsulfuron","Total")]="SulfosulfuronMetsulfuron"
+
+LDSestim$Herbicidename_cat=ordered(LDSestim$Herbicidename_cat,levels=c("No weeding","Manual","Manual_herb","2,4-D","SulfosulfuronMetsulfuron"))
+
+```
+
+
+## Graphics
+
+
+```{r}
+table(LDSestim$Sowing_Date_Schedule)
+
+LDSestim$D.q410_varName[LDSestim$D.q410_varName=="ShriRam 303"]="SUPER303"
+
+LDSestim_variety = subset(LDSestim, LDSestim$D.q410_varName %in% c("PBW343", "UP262", "LOK1", "HD2967", "PBW154", "Kedar", "SUPER303", "PBW502", "HD2733", "HUW234", "RR21", "Local"))
+
+LDSestim_variety$D.q410_varName=ordered(LDSestim_variety$D.q410_varName,levels=c("HD2967","Local","PBW343","UP262","LOK1","PBW154","Kedar","SUPER303","PBW502","HD2733","HUW234","RR21"))
+
+
+# Bar graphs showing percentage of farmers adopting these practices
+
+library(tidyverse)
+library(ggplot2)
+
+bar_chart=function(dat,var){
+  dat|>
+    drop_na({{var}})|>
+    mutate({{var}}:=factor({{var}})|>fct_infreq())|>
+    ggplot()+
+    geom_bar(aes(y={{var}}),width = 0.3,fill="dodgerblue4")+
+    theme_minimal(base_size = 16)
+}
+
+
+herb_plot=bar_chart(LDSestim,Herbicidename_cat)+labs(y="Weed management options")
+herb_plot
+sow_plot=bar_chart(LDSestim,Sowing_Date_Schedule)+labs(y="Sowing dates")
+sow_plot
+irrig_plot=bar_chart(LDSestim,G.q5305_irrigTimes_cat)+labs(y="Number of irrigations")
+irrig_plot
+variety_plot=bar_chart(LDSestim_variety,D.q410_varName)+labs(y="Variety")
+variety_plot
+
+
+
+library(ggpubr)
+adoption_all=ggarrange(herb_plot,sow_plot,irrig_plot,variety_plot, ncol = 2,nrow=2)
+adoption_all
+ggsave("figures/adoption_all.png")
+
+# Alternative graphs
+Herbicidename_cat_n_perc=LDSestim%>%
+   dplyr::count(Herbicidename_cat, sort = TRUE) %>% 
+   dplyr::mutate(Herbicidename_cat_n=     forcats::fct_rev(forcats::fct_inorder(Herbicidename_cat)),
+  Herbicidename_cat_n = forcats::fct_relevel(Herbicidename_cat, after = 0)) %>%
+    dplyr::mutate(herbpercent=paste0(sprintf("%4.1f",n/sum(n)*100),"%"))
+
+library(forcats)
+
+ggplot(Herbicidename_cat_n_perc, aes(x = n, y = Herbicidename_cat)) +
+  geom_col(fill = "dodgerblue4") +
+  ## add percentage labels
+  geom_text(aes(label = herbpercent),hjust = 1, nudge_x = -.5,color="white") +
+  theme_minimal(base_size = 16)
+
+
+# Error bar plots showing yield gains of each of the choices 
+
+## Weed management options 
+library(ggpubr)
+library(tidyverse)
+WeedMgt_Options_Errorplot=
+  LDSestim%>% 
+  drop_na(Herbicidename_cat) %>%
+  ggerrorplot(x = "Herbicidename_cat", y = "L.tonPerHectare",add = "mean", error.plot = "errorbar", color="black",size=1,ggtheme=theme_bw())+
+  labs(x="Weed management options",y="Wheat yield (t/ha)")+
+  theme_bw(base_size = 16)+coord_flip()
+
+WeedMgt_Options_Errorplot+
+  aes(x = fct_reorder(Herbicidename_cat, L.tonPerHectare))+
+ xlab("Weed management options")
+#theme(axis.text = element_text(size = 20,colour = "black"))+theme(axis.title = element_text(size = 20))
+ggsave("figures/WeedMgt_Options_Errorplot.png")
+
+write.csv(LDSestim,"LDSestim.csv")
+
+#Sowing dates
+SowingDate_Options_Errorplot=
+  LDSestim%>% 
+  drop_na(Sowing_Date_Schedule) %>%
+  ggerrorplot(x = "Sowing_Date_Schedule", y = "L.tonPerHectare",add = "mean", error.plot = "errorbar", color="black",size=1, ggtheme=theme_bw())+
+  labs(x="Sowing date options",y="Wheat yield (t/ha)")+
+  theme_bw(base_size = 16)+coord_flip()
+
+SowingDate_Options_Errorplot+aes(x = fct_reorder(Sowing_Date_Schedule, L.tonPerHectare))+
+ xlab("Sowing date options")
+ggsave("figures/SowingDate_Options_Errorplot.png",dpi=300)
+
+# Irrigation schedules
+Irrigation_Options_Errorplot=
+  LDSestim%>% 
+  drop_na(G.q5305_irrigTimes_cat) %>%
+  ggerrorplot(x = "G.q5305_irrigTimes_cat", y = "L.tonPerHectare",add = "mean", error.plot = "errorbar",color="black",size=1, ggtheme=theme_bw())+
+  labs(x="Irrigation scheduling options",y="Wheat yield (t/ha)")+
+  theme_bw(base_size = 16)+coord_flip()
+
+Irrigation_Options_Errorplot+ aes(x = fct_reorder(G.q5305_irrigTimes_cat, L.tonPerHectare))+
+ xlab("Irrigation scheduling options")
+ggsave("figures/Irrigation_Options_Errorplot.png")
+
+
+# Varieties 
+
+Variety_Options_Errorplot=
+  LDSestim_variety%>% 
+  drop_na(D.q410_varName) %>%
+  ggerrorplot(x = "D.q410_varName", y = "L.tonPerHectare",add = "mean", error.plot = "errorbar", color="black",size=1, ggtheme=theme_bw())+
+  labs(x="Varietal options",y="Wheat yield (t/ha)")+
+  theme_bw(base_size = 16)+coord_flip()
+
+Variety_Options_Errorplot+ aes(x = fct_reorder(D.q410_varName, L.tonPerHectare))+
+ xlab("Varietal options")
+
+ggsave("figures/Variety_Options_Errorplot.png")
+
+
+library(ggpubr)
+mean_comparison_all=ggarrange(WeedMgt_Options_Errorplot,SowingDate_Options_Errorplot,Irrigation_Options_Errorplot,Variety_Options_Errorplot, ncol = 2,nrow=2)
+
+mean_comparison_all
+ggsave("figures/mean_comparison_all.png")
+
+
+
+```
+
+
+## Descriptives
+
+
+```{r}
+
+library(fastDummies)
+LDSestim_Desc=fastDummies::dummy_cols(LDSestim, select_columns=c("G.q5305_irrigTimes_cat","Sowing_Date_Schedule","Herbicidename_cat","A.q112_fEdu_new"))
+
+
+library(fBasics)
+summ_stats <- fBasics::basicStats(LDSestim_Desc[,c("L.tonPerHectare","G.q5305_irrigTimes",
+  "G.q5305_irrigTimes_cat_One","G.q5305_irrigTimes_cat_Two",                 "G.q5305_irrigTimes_cat_Three","G.q5305_irrigTimes_cat_Fourplus","Sowing_Date_Schedule_T5_16Dec",               "Sowing_Date_Schedule_T4_15Dec","Sowing_Date_Schedule_T3_30Nov",             "Sowing_Date_Schedule_T2_20Nov","Sowing_Date_Schedule_T1_10Nov",             "A.q112_fEdu_new_noSchooling","A.q112_fEdu_new_primary","A.q112_fEdu_new_matriculation", "A.q112_fEdu_new_seniorSecondary",          "A.q112_fEdu_new_bachelors","A.q112_fEdu_new_Postgrad",                                      "Nperha","P2O5perha","Weedmanaged","variety_type_NMWV","Sowing_Date_Early","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num",                                       "temp","precip","wc2.1_30s_elev",
+                                                       "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","A.q111_fGenderdum","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm")])
+summ_stats <- as.data.frame(t(summ_stats))
+
+# Rename some of the columns for convenience
+summ_stats <- summ_stats[c("Mean", "Stdev", "Minimum", "1. Quartile", "Median",  "3. Quartile", "Maximum")] %>% 
+  rename("Lower quartile" = '1. Quartile', "Upper quartile"= "3. Quartile")
+
+summ_stats
+
+library(reactable)
+library(htmltools)
+library(fontawesome)
+
+htmltools::browsable(
+  tagList(
+    tags$button(
+      tagList(fontawesome::fa("download"), "Download as CSV"),
+      onclick = "Reactable.downloadDataCSV('summ_stats', 'summ_stats.csv')"
+    ),
+
+    reactable(
+      summ_stats,
+      searchable = TRUE,
+      defaultPageSize = 38,
+      elementId = "summ_stats"
+    )
+  )
+)
+#write.csv(summ_stats,"tables/summ_stats.csv")
+
+# Correlation plot
+# library(corrplot)
+# Correlations=cor(LDSestim[,c("L.tonPerHectare","G.q5305_irrigTimes","Nperha","P2O5perha","Weedmanaged","variety_type_NMWV","Sowing_Date_Early")],na.rm=TRUE)
+# 
+# Correlationsplot=corrplot(Correlations)
+# Correlationsplot
+
+
+library(modelsummary)
+
+Sowpercent=datasummary(Sowing_Date_Schedule+1~N + Percent() , data = LDSestim,output = 'data.frame')
+
+
+library(reactable)
+library(htmltools)
+library(fontawesome)
+
+htmltools::browsable(
+  tagList(
+    tags$button(
+      tagList(fontawesome::fa("download"), "Download as CSV"),
+      onclick = "Reactable.downloadDataCSV('Sowpercent', 'Sowpercent.csv')"
+    ),
+
+    reactable(
+      Sowpercent,
+      searchable = TRUE,
+      defaultPageSize = 38,
+      elementId = "Sowpercent"
+    )
+  )
+)
+
+Varietypercent=datasummary(D.q410_varName+1~N + Percent() , data = LDSestim_variety,output = 'data.frame')
+
+
+
+htmltools::browsable(
+  tagList(
+    tags$button(
+      tagList(fontawesome::fa("download"), "Download as CSV"),
+      onclick = "Reactable.downloadDataCSV('Varietypercent', 'Varietypercent.csv')"
+    ),
+
+    reactable(
+      Varietypercent,
+      searchable = TRUE,
+      defaultPageSize = 38,
+      elementId = "Varietypercent"
+    )
+  )
+)
+
+
+
+Herbpercent=datasummary(Herbicidename_cat+1~N + Percent() , data = LDSestim,output = 'data.frame')
+
+
+
+htmltools::browsable(
+  tagList(
+    tags$button(
+      tagList(fontawesome::fa("download"), "Download as CSV"),
+      onclick = "Reactable.downloadDataCSV('Herbpercent', 'Herbpercent.csv')"
+    ),
+
+    reactable(
+      Herbpercent,
+      searchable = TRUE,
+      defaultPageSize = 38,
+      elementId = "Herbpercent"
+    )
+  )
+)
+
+Irrigpercent=datasummary(G.q5305_irrigTimes_cat+1~N + Percent() , data = LDSestim,output = 'data.frame')
+
+
+htmltools::browsable(
+  tagList(
+    tags$button(
+      tagList(fontawesome::fa("download"), "Download as CSV"),
+      onclick = "Reactable.downloadDataCSV('Irrigpercent', 'Irrigpercent.csv')"
+    ),
+
+    reactable(
+     Irrigpercent,
+      searchable = TRUE,
+      defaultPageSize = 38,
+      elementId = "Irrigpercent"
+    )
+  )
+)
+
+```
+
+
+# Weed management
+
+
+```{r}
+LDSestim_herb=subset(LDSestim, !(is.na(LDSestim$Herbicidename_cat)))
+
+
+# Multi-arm offline policy evaluation 
+
+library(grf)
+library(policytree)
+
+LDSestim_herb=subset(LDSestim_herb, select=c("Herbicidename_cat","G.q5305_irrigTimes_cat","Sowing_Date_Schedule_rating_num","L.tonPerHectare","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num",                                       "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                       "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","A.q111_fGenderdum","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude"))
+
+library(tidyr)
+LDSestim_herb=LDSestim_herb %>% drop_na()
+
+
+Y_cf_herb=as.vector(LDSestim_herb$L.tonPerHectare)
+## Causal random forest -----------------
+
+X_cf_herb=subset(LDSestim_herb, select=c("I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num",                     "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","Sowing_Date_Schedule_rating_num","A.q111_fGenderdum","temp","precip","wc2.1_30s_elev","M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude","Sowing_Date_Schedule_rating_num"))
+
+
+W_cf_herb <- as.factor(LDSestim_herb$Herbicidename_cat)
+
+W.multi_herb.forest <- probability_forest(X_cf_herb, W_cf_herb,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_herb <- predict(W.multi_herb.forest, estimate.variance = TRUE)$predictions
+
+
+Y.multi_herb.forest <- regression_forest(X_cf_herb, Y_cf_herb,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_herb.forest)
+
+
+varimp.multi_herb <- variable_importance(Y.multi_herb.forest)
+
+Y.hat.multi.all_herb <- predict(Y.multi_herb.forest, estimate.variance = TRUE)$predictions
+
+# Regression tree
+# tree_herb <- get_tree(Y.multi_herb.forest, 1)
+# plot(tree_herb )
+
+
+# Causal forest
+multi_herb.forest <- multi_arm_causal_forest(X = X_cf_herb, Y = Y_cf_herb, W = W_cf_herb,W.hat=W.hat.multi.all_herb,Y.hat=Y.hat.multi.all_herb,seed=1234) 
+
+varimp.multi_herb_cf <- variable_importance(multi_herb.forest )
+
+multi_herb_ate=average_treatment_effect(multi_herb.forest, method="AIPW")
+multi_herb_ate
+#write.csv(multi_herb_ate,"tables/multi_herb_ate.csv")
+
+# Variable importance plot
+ vars=c("I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num",                     "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","Sowing_Date_Schedule_rating_num","A.q111_fGenderdum","temp","precip","wc2.1_30s_elev","M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude","Sowing_Date_Schedule_rating_num")
+
+## variable importance plot ----------------------------------------------------
+varimpvars=as.data.frame(cbind(varimp.multi_herb_cf,vars))
+names(varimpvars)[1]="Variableimportance"
+varimpvars$Variableimportance=formatC(varimpvars$Variableimportance, digits = 2, format = "f")
+varimpvars$Variableimportance=as.numeric(varimpvars$Variableimportance)
+
+varimpplotRF=ggplot(varimpvars,aes(x=reorder(vars,Variableimportance),
+                                   y=Variableimportance))+
+   geom_jitter(color="steelblue")+
+   coord_flip()+
+   labs(x="Variables",y="Variable importance")
+ previous_theme <- theme_set(theme_bw(base_size = 16))
+ varimpplotRF
+ ggsave("figures/varimpplotRF_herb.png",dpi=300)
+
+
+
+# Policy tree --------------------------------------
+DR.scores_herb <- double_robust_scores(multi_herb.forest)
+
+tr_herb <- policy_tree(X_cf_herb, DR.scores_herb, depth = 2) 
+tr_herb
+plot(tr_herb)
+
+# 
+tr_herb3 <- hybrid_policy_tree(X_cf_herb, DR.scores_herb, depth = 3) 
+tr_herb3
+plot(tr_herb3)
+
+# Depth 4 model
+
+tr_herb4 <- hybrid_policy_tree(X_cf_herb, DR.scores_herb, depth = 4) 
+tr_herb4
+plot(tr_herb4)
+
+# Treatment assignment
+tr_assignment_herb=LDSestim_herb
+
+tr_assignment_herb$depth2 <- predict(tr_herb, X_cf_herb)
+table(tr_assignment_herb$depth2)
+tr_assignment_herb$depth3 <- predict(tr_herb3, X_cf_herb)
+table(tr_assignment_herb$depth3)
+tr_assignment_herb$depth4 <- predict(tr_herb4, X_cf_herb)
+table(tr_assignment_herb$depth4)
+
+
+
+
+```
+
+
+# Sowing date model
+
+
+```{r}
+library(grf)
+library(policytree)
+
+LDSestim_sow=subset(LDSestim, select=c("Sowing_Date_Early","Sowing_Date_Schedule","L.tonPerHectare","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num",                                       "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                       "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude"))
+
+library(tidyr)
+LDSestim_sow=LDSestim_sow %>% drop_na()
+
+
+Y_cf_sowing=as.vector(LDSestim_sow$L.tonPerHectare)
+## Causal random forest -----------------
+
+X_cf_sowing=subset(LDSestim_sow, select=c("I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num",
+                                                  "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                       "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude"))
+
+
+W_cf_sowing <- as.factor(LDSestim_sow$Sowing_Date_Schedule)
+
+W.multi_sowing.forest <- probability_forest(X_cf_sowing, W_cf_sowing,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_sowing <- predict(W.multi_sowing.forest, estimate.variance = TRUE)$predictions
+
+
+
+Y.multi_sowing.forest <- regression_forest(X_cf_sowing, Y_cf_sowing,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_sowing.forest)
+varimp.multi_sowing <- variable_importance(Y.multi_sowing.forest)
+Y.hat.multi.all_sowing <- predict(Y.multi_sowing.forest, estimate.variance = TRUE)$predictions
+
+
+
+multi_sowing.forest <- multi_arm_causal_forest(X = X_cf_sowing, Y = Y_cf_sowing, W = W_cf_sowing ,W.hat=W.hat.multi.all_sowing,Y.hat=Y.hat.multi.all_sowing,seed=2) 
+
+varimp.multi_sowing_cf <- variable_importance(multi_sowing.forest)
+
+multi_sowing_ate=average_treatment_effect(multi_sowing.forest, method="AIPW")
+multi_sowing_ate
+
+
+varimp.multi_sowing_cf <- variable_importance(multi_sowing.forest)
+vars_sowing=c("I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num",
+                                                  "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                       "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude")
+
+## variable importance plot ----------------------------------------------------
+varimpvars_sowing=as.data.frame(cbind(varimp.multi_sowing_cf,vars_sowing))
+names(varimpvars_sowing)[1]="Variableimportance_sowing"
+varimpvars_sowing$Variableimportance_sowing=formatC(varimpvars_sowing$Variableimportance_sowing, digits = 2, format = "f")
+varimpvars_sowing$Variableimportance_sowing=as.numeric(varimpvars_sowing$Variableimportance_sowing)
+varimpplotRF_sowing=ggplot(varimpvars_sowing,aes(x=reorder(vars_sowing,Variableimportance_sowing),y=Variableimportance_sowing))+
+   geom_jitter(color="steelblue")+
+   coord_flip()+
+   labs(x="Variables",y="Variable importance")
+ previous_theme <- theme_set(theme_bw(base_size = 16))
+ varimpplotRF_sowing
+ ggsave("figures/varimpplotRF_sowing.png",dpi=300)
+
+
+# Policy tree --------------------------------------
+DR.scores_sowing <- double_robust_scores(multi_sowing.forest)
+
+tr_sowing <- policy_tree(X_cf_sowing, DR.scores_sowing, depth = 2) 
+plot(tr_sowing)
+
+
+tr_sowing3 <- hybrid_policy_tree(X_cf_sowing, DR.scores_sowing, depth = 3) 
+tr_sowing3
+plot(tr_sowing3)
+
+tr_sowing4 <- hybrid_policy_tree(X_cf_sowing, DR.scores_sowing, depth = 4) 
+tr_sowing4
+plot(tr_sowing4)
+
+tr_assignment_sowing=LDSestim_sow
+
+tr_assignment_sowing$depth2 <- predict(tr_sowing, X_cf_sowing)
+table(tr_assignment_sowing$depth2)
+tr_assignment_sowing$depth3 <- predict(tr_sowing3, X_cf_sowing)
+table(tr_assignment_sowing$depth3)
+tr_assignment_sowing$depth4 <- predict(tr_sowing4, X_cf_sowing)
+table(tr_assignment_sowing$depth4)
+
+
+```
+
+
+## Binary causal RF calibration check
+
+The causal random forest results need to be checked for fit. However, there is no available algorithm to check this for the mult-arm causal RF. We therefore rely on the binary causal RF. Mean and differential forest prediction calibrations are used for such purposes. A coefficient of 1 for mean forest prediction suggests that the mean forest prediction is correct while a coefficient of 1 for differential forest prediction suggests that the forest has captured heterogeneity in the underlying signal (Tibshirani et al 2022). The following code fits the binary.
+
+
+```{r}
+ # Calibration check: Multi-arm causal RF does not yet calibration check
+ ## We use binary causal RF to do that
+ 
+W_cf_sowing_binary=as.vector(LDSestim_sow$Sowing_Date_Early) 
+
+# Probability random forest to create weights
+W.multi_sowing.forest_binary <- regression_forest(X_cf_sowing, W_cf_sowing_binary,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_sowing_binary <- predict(W.multi_sowing.forest_binary, estimate.variance = TRUE)$predictions
+
+
+# Regression forest to get expected responses 
+Y.multi_sowing.forest_binary <- regression_forest(X_cf_sowing, Y_cf_sowing,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_sowing.forest_binary)
+varimp.multi_sowing_binary <- variable_importance(Y.multi_sowing.forest_binary)
+Y.hat.multi.all_sowing_binary <- predict(Y.multi_sowing.forest_binary, estimate.variance = TRUE)$predictions
+
+# Fit binary causal RF model
+multi_sowing.forest_binary <- causal_forest(X = X_cf_sowing, Y = Y_cf_sowing, W = W_cf_sowing_binary ,W.hat=W.hat.multi.all_sowing_binary,Y.hat=Y.hat.multi.all_sowing_binary,seed=2) 
+
+varimp.multi_sowing_cf_binary <- variable_importance(multi_sowing.forest_binary)
+
+# Average treatment effects
+multi_sowing_ate_binary=average_treatment_effect(multi_sowing.forest_binary,target.sample = "overlap")
+multi_sowing_ate_binary
+
+multi_sowing_binary_calibration=test_calibration(multi_sowing.forest_binary)
+multi_sowing_binary_calibration
+```
+
+
+# Irrigation management
+
+
+```{r}
+library(grf)
+library(policytree)
+
+LDSestim_irrig=subset(LDSestim, select=c("L.tonPerHectare","G.q5305_irrigTimes_cat","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num","Nperha","P2O5perha","variety_type_NMWV","Sowing_Date_Schedule_rating_num","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                                    "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude"))
+
+library(tidyr)
+LDSestim_irrig=LDSestim_irrig %>% drop_na()
+
+
+Y_cf_irrig=as.vector(LDSestim_irrig$L.tonPerHectare)
+## Causal random forest -----------------
+
+X_cf_irrig=subset(LDSestim_irrig, select=c("I.q5505_weedSeverity_num","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num","Nperha","P2O5perha","variety_type_NMWV","Sowing_Date_Schedule_rating_num","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                                    "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude"))
+
+
+W_cf_irrig <- as.factor(LDSestim_irrig$G.q5305_irrigTimes_cat)
+
+
+W.multi_irrig.forest <- probability_forest(X_cf_irrig, W_cf_irrig,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_irrig <- predict(W.multi_irrig.forest, estimate.variance = TRUE)$predictions
+
+
+
+
+Y.multi_irrig.forest <- regression_forest(X_cf_irrig, Y_cf_irrig,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_irrig.forest)
+varimp.multi_irrig <- variable_importance(Y.multi_irrig.forest)
+
+Y.hat.multi.all_irrig <- predict(Y.multi_irrig.forest, estimate.variance = TRUE)$predictions
+
+
+multi_irrig.forest <- multi_arm_causal_forest(X = X_cf_irrig, Y = Y_cf_irrig, W = W_cf_irrig,Y.hat =Y.hat.multi.all_irrig,W.hat =W.hat.multi.all_irrig)
+
+mc.pred_irrig <- predict(multi_irrig.forest, drop = TRUE)
+tau.hat_irrig <- mc.pred_irrig$predictions
+tau.hat_irrig=as.data.frame(tau.hat_irrig)
+
+multi_irrig_ate=average_treatment_effect(multi_irrig.forest, method="AIPW")
+multi_irrig_ate
+#write.csv(multi_irrig_ate,"tables/multi_irrig_ate.csv")
+
+varimp.multi_irrig_cf <- variable_importance(multi_irrig.forest)
+vars_irrig=c("I.q5505_weedSeverity_num","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num","Nperha","P2O5perha","variety_type_NMWV","Sowing_Date_Schedule_rating_num","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                                    "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude")
+
+## variable importance plot ----------------------------------------------------
+varimpvars_irrig=as.data.frame(cbind(varimp.multi_irrig_cf,vars_irrig))
+names(varimpvars_irrig)[1]="Variableimportance_irrig"
+varimpvars_irrig$Variableimportance_irrig=formatC(varimpvars_irrig$Variableimportance_irrig, digits = 2, format = "f")
+varimpvars_irrig$Variableimportance_irrig=as.numeric(varimpvars_irrig$Variableimportance_irrig)
+varimpplotRF_irrig=ggplot(varimpvars_irrig,aes(x=reorder(vars_irrig,Variableimportance_irrig),y=Variableimportance_irrig))+
+   geom_jitter(color="steelblue")+
+   coord_flip()+
+   labs(x="Variables",y="Variable importance")
+ previous_theme <- theme_set(theme_bw(base_size = 16))
+ varimpplotRF_irrig
+ ggsave("figures/varimpplotRF_irrig.png",dpi=300)
+
+
+# Policy tree --------------------------------------
+DR.scores_irrig <- double_robust_scores(multi_irrig.forest)
+
+tr_irrig <- policy_tree(X_cf_irrig, DR.scores_irrig, depth = 2) 
+tr_irrig
+plot(tr_irrig)
+# Using greedy approach
+# Depth 3 model
+tr_irrig3 <- hybrid_policy_tree(X_cf_irrig, DR.scores_irrig, depth = 3) 
+tr_irrig3
+plot(tr_irrig3)
+
+
+# Depth 4 model
+
+tr_irrig4 <- hybrid_policy_tree(X_cf_irrig, DR.scores_irrig, depth = 4) 
+tr_irrig4
+plot(tr_irrig4)
+
+# Treatment assignment
+tr_assignment_irrig=LDSestim_irrig
+
+tr_assignment_irrig$depth2 <- predict(tr_irrig, X_cf_irrig)
+table(tr_assignment_irrig$depth2)
+tr_assignment_irrig$depth3 <- predict(tr_irrig3, X_cf_irrig)
+table(tr_assignment_irrig$depth3)
+tr_assignment_irrig$depth4 <- predict(tr_irrig4, X_cf_irrig)
+table(tr_assignment_irrig$depth4)
+
+
+
+
+
+```
+
+## Binary causal RF calibration check
+
+The causal random forest results need to be checked for fit. However, there is no available algorithm to check this for the mult-arm causal RF. We therefore rely on the binary causal RF. Mean and differential forest prediction calibrations are used for such purposes. A coefficient of 1 for mean forest prediction suggests that the mean forest prediction is correct while a coefficient of 1 for differential forest prediction suggests that the forest has captured heterogeneity in the underlying signal (Tibshirani et al 2022). The following code fits the binary.
+
+
+```{r}
+ # Calibration check: Multi-arm causal RF does not yet calibration check
+ ## We use binary causal RF to do that
+ 
+LDSestim_irrig$G.q5305_irrigTimes_three_plus[LDSestim_irrig$G.q5305_irrigTimes_cat%in%c("Three","Fourplus")]=1
+
+LDSestim_irrig$G.q5305_irrigTimes_three_plus[LDSestim_irrig$G.q5305_irrigTimes_cat%in%c("One","Two")]=0
+
+W_cf_irrig_binary=as.vector(LDSestim_sow$G.q5305_irrigTimes_three_plus) 
+
+# Probability random forest to create weights
+W.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, W_cf_irrig_binary,
+  equalize.cluster.weights = FALSE,
+  seed = 2)
+
+W.hat.multi.all_irrig_binary <- predict(W.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
+
+
+# Regression forest to get expected responses 
+Y.multi_irrig.forest_binary <- regression_forest(X_cf_irrig, Y_cf_irrig,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_irrig.forest_binary)
+varimp.multi_irrig_binary <- variable_importance(Y.multi_irrig.forest_binary)
+Y.hat.multi.all_irrig_binary <- predict(Y.multi_irrig.forest_binary, estimate.variance = TRUE)$predictions
+
+# Fit binary causal RF model
+multi_irrig.forest_binary <- causal_forest(X = X_cf_irrig, Y = Y_cf_irrig, W = W_cf_irrig_binary ,W.hat=W.hat.multi.all_irrig_binary,Y.hat=Y.hat.multi.all_irrig_binary,seed=2) 
+
+varimp.multi_irrig_cf_binary <- variable_importance(multi_irrig.forest_binary)
+
+# Average treatment effects
+multi_irrig_ate_binary=average_treatment_effect(multi_irrig.forest_binary,target.sample = "overlap")
+multi_irrig_ate_binary
+
+multi_irrig_binary_calibration=test_calibration(multi_irrig.forest_binary)
+multi_irrig_binary_calibration
+```
+
+
+
+
+# Varieties
+
+
+```{r}
+table_varieties=sort(xtabs(~LDS$D.varName))
+table_varieties
+
+#LDSestim$D.q410_varName[LDSestim$D.q410_varName=="NL1"]=NA
+LDSestim$D.q410_varName[LDSestim$D.q410_varName=="ShriRam 303"]="SUPER303"
+
+LDSestim_variety=subset(LDSestim,LDSestim$D.q410_varName%in%c("PBW343","UP262","LOK1","HD2967","PBW154","Kedar","SUPER303","PBW502","HD2733","HUW234","RR21","Local"))
+
+LDSestim_variety$D.q410_varName=ordered(LDSestim_variety$D.q410_varName,levels=c("HD2967","Local","PBW343","UP262","LOK1","PBW154","Kedar","SUPER303","PBW502","HD2733","HUW234","RR21"))
+
+library(grf)
+library(policytree)
+
+LDSestim_variety=subset(LDSestim_variety, select=c("D.q410_varName","G.q5305_irrigTimes_cat","Sowing_Date_Schedule_rating_num","L.tonPerHectare","I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num","I.q5502_droughtSeverity_num",                                       "Nperha","P2O5perha","variety_type_NMWV","G.q5305_irrigTimes","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                       "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude"))
+
+
+library(tidyr)
+LDSestim_variety=LDSestim_variety %>% drop_na()
+
+
+Y_cf_variety=as.vector(LDSestim_variety$L.tonPerHectare)
+## Causal random forest -----------------
+
+X_cf_variety=subset(LDSestim_variety, select=c("I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num",
+                                                  "Nperha","P2O5perha","G.q5305_irrigTimes","Sowing_Date_Schedule_rating_num","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                       "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude"))
+
+
+W_cf_variety <- as.factor(LDSestim_variety$D.q410_varName)
+
+W.multi_variety.forest <- probability_forest(X_cf_variety, W_cf_variety,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_variety <- predict(W.multi_variety.forest, estimate.variance = TRUE)$predictions
+
+
+Y.multi_variety.forest <- regression_forest(X_cf_variety, Y_cf_variety,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_variety.forest)
+
+varimp.multi_variety <- variable_importance(Y.multi_variety.forest)
+Y.hat.multi.all_variety <- predict(Y.multi_variety.forest, estimate.variance = TRUE)$predictions
+
+
+multi_variety.forest <- multi_arm_causal_forest(X = X_cf_variety, Y = Y_cf_variety, W = W_cf_variety,W.hat =W.hat.multi.all_variety , Y.hat=Y.hat.multi.all_variety, seed=1234) 
+
+
+
+multi_variety_ate=average_treatment_effect(multi_variety.forest, method="AIPW")
+multi_variety_ate
+#write.csv(multi_variety_ate,"tables/multi_variety_ate.csv")
+
+varimp.multi_variety_cf <- variable_importance(multi_variety.forest)
+vars_variety=c("I.q5505_weedSeverity_num","I.q5509_diseaseSeverity_num","I.q5506_insectSeverity_num",
+                                                  "Nperha","P2O5perha","G.q5305_irrigTimes","Sowing_Date_Schedule_rating_num","A.q111_fGenderdum","Weedmanaged","temp","precip","wc2.1_30s_elev",
+                                                       "M.q708_marketDistance","C.q306_cropLarestAreaHA","A.q112_fEdu_new_num","Caste_marginalized","Plot_owned","nitrogen_0.5cm","sand_0.5cm", "soc_5.15cm","O.largestPlotGPS.Latitude","O.largestPlotGPS.Longitude")
+
+## variable importance plot ----------------------------------------------------
+varimpvars_variety=as.data.frame(cbind(varimp.multi_variety_cf,vars_variety))
+names(varimpvars_variety)[1]="Variableimportance_variety"
+varimpvars_variety$Variableimportance_variety=formatC(varimpvars_variety$Variableimportance_variety, digits = 2, format = "f")
+
+varimpvars_variety$Variableimportance_variety=as.numeric(varimpvars_variety$Variableimportance_variety)
+varimpplotRF_variety=ggplot(varimpvars_variety,aes(x=reorder(vars_variety,Variableimportance_variety),y=Variableimportance_variety))+
+   geom_jitter(color="steelblue")+
+   coord_flip()+
+   labs(x="Variables",y="Variable importance")
+ previous_theme <- theme_set(theme_bw(base_size = 16))
+ varimpplotRF_variety
+ ggsave("figures/varimpplotRF_variety.png",dpi=300)
+
+# Policy tree --------------------------------------
+DR.scores_variety <- double_robust_scores(multi_variety.forest)
+
+tr_variety <- policy_tree(X_cf_variety, DR.scores_variety, depth = 2) 
+tr_variety
+plot(tr_variety)
+
+tr_variety3 <- hybrid_policy_tree(X_cf_variety, DR.scores_variety, depth = 3) 
+tr_variety3
+plot(tr_variety3)
+
+tr_variety4 <- hybrid_policy_tree(X_cf_variety, DR.scores_variety, depth = 4) 
+tr_variety4
+plot(tr_variety4)
+
+tr_assignment_variety=LDSestim_variety
+
+tr_assignment_variety$depth2 <- predict(tr_variety, X_cf_variety)
+table(tr_assignment_variety$depth2)
+tr_assignment_variety$depth3 <- predict(tr_variety3, X_cf_variety)
+table(tr_assignment_variety$depth3)
+tr_assignment_variety$depth4 <- predict(tr_variety4, X_cf_variety)
+
+table(tr_assignment_variety$depth4)
+
+# 
+
+# Saving a plot in a vectorized SVG format can be done with the `DiagrammeRsvg` package. install.packages("DiagrammeRsvg")
+
+library(DiagrammeRsvg)
+
+#cat(DiagrammeRsvg::export_svg(tr_variety), file = 'figures/tr_variety.svg')
+#cat(DiagrammeRsvg::export_svg(tr_variety3), file = 'figures/tr_variety3.svg')
+#cat(DiagrammeRsvg::export_svg(tr_variety4), file = 'figures/tr_variety4.svg')
+
+
+
+
+```
+
+
+
+
+## Binary causal RF calibration check
+
+The causal random forest results need to be checked for fit. However, there is no available algorithm to check this for the mult-arm causal RF. We therefore rely on the binary causal RF. Mean and differential forest prediction calibrations are used for such purposes. A coefficient of 1 for mean forest prediction suggests that the mean forest prediction is correct while a coefficient of 1 for differential forest prediction suggests that the forest has captured heterogeneity in the underlying signal (Tibshirani et al 2022). The following code fits the binary.
+
+
+```{r}
+ # Calibration check: Multi-arm causal RF does not yet calibration check
+ ## We use binary causal RF to do that
+ 
+W_cf_variety_binary=as.vector(LDSestim_variety$variety_type_NMWV) 
+
+# Probability random forest to create weights
+W.multi_variety.forest_binary <- regression_forest(X_cf_variety, W_cf_variety_binary,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+W.hat.multi.all_variety_binary <- predict(W.multi_variety.forest_binary, estimate.variance = TRUE)$predictions
+
+
+# Regression forest to get expected responses 
+Y.multi_variety.forest_binary <- regression_forest(X_cf_variety, Y_cf_variety,
+  equalize.cluster.weights = FALSE,
+  seed = 2
+)
+
+print(Y.multi_variety.forest_binary)
+varimp.multi_variety_binary <- variable_importance(Y.multi_variety.forest_binary)
+
+Y.hat.multi.all_variety_binary <- predict(Y.multi_variety.forest_binary, estimate.variance = TRUE)$predictions
+
+# Fit binary causal RF model
+multi_variety.forest_binary <- causal_forest(X = X_cf_variety, Y = Y_cf_variety, W = W_cf_variety_binary ,W.hat=W.hat.multi.all_variety_binary,Y.hat=Y.hat.multi.all_variety_binary,seed=2) 
+
+varimp.multi_variety_cf_binary <- variable_importance(multi_variety.forest_binary)
+
+# Average treatment effects
+multi_variety_ate_binary=average_treatment_effect(multi_variety.forest_binary,target.sample = "overlap")
+multi_variety_ate_binary
+
+multi_variety_binary_calibration=test_calibration(multi_variety.forest_binary)
+multi_variety_binary_calibration
+```
+
+
+
+
+
+
+
+# Mapping and cross targeting
+
+## Weed management
+
+
+```{r}
+library(rgdal)
+
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2==1]="No weeding"
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2==2]="Manual"
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2==3]="Manual+Herbicide"
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2==4]="2,4-D"
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2==5]="SulfosulfuronMetsulfuron"
+
+tr_assignment_herbsp= SpatialPointsDataFrame(cbind(tr_assignment_herb$O.largestPlotGPS.Longitude,tr_assignment_herb$O.largestPlotGPS.Latitude),data=tr_assignment_herb,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+tr_assignment_herbspmapview=mapview(tr_assignment_herbsp,zcol="depth2_cat",layer.name = 'Recommended weed management')
+tr_assignment_herbspmapview
+
+```
+
+
+## Sowing
+
+
+```{r}
+
+library(rgdal)
+
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2==1]="T5_16Dec"
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2==2]="T4_15Dec"
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2==3]="T3_30Nov"
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2==4]="T2_20Nov"
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2==5]="T1_10Nov"
+
+tr_assignment_sowingsp= SpatialPointsDataFrame(cbind(tr_assignment_sowing$O.largestPlotGPS.Longitude,tr_assignment_sowing$O.largestPlotGPS.Latitude),data=tr_assignment_sowing,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+tr_assignment_sowingspmapview=mapview(tr_assignment_sowingsp,zcol="depth2_cat",layer.name="Recommended sowing dates")
+tr_assignment_sowingspmapview
+
+ mapshot(tr_assignment_sowingspmapview, url = paste0(getwd(), "/figures/tr_assignment_sowingspmapview.html"),
+         file = paste0(getwd(), "/figures/tr_assignment_sowingspmapview.png"))
+
+
+
+```
+
+
+## Irrigation
+
+
+```{r}
+library(rgdal)
+
+tr_assignment_irrig$depth2_cat[tr_assignment_irrig$depth2==1]="1"
+tr_assignment_irrig$depth2_cat[tr_assignment_irrig$depth2==2]="2"
+tr_assignment_irrig$depth2_cat[tr_assignment_irrig$depth2==3]="3"
+tr_assignment_irrig$depth2_cat[tr_assignment_irrig$depth2==4]="4"
+
+
+tr_assignment_irrigsp= SpatialPointsDataFrame(cbind(tr_assignment_irrig$O.largestPlotGPS.Longitude,tr_assignment_irrig$O.largestPlotGPS.Latitude),data=tr_assignment_irrig,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+tr_assignment_irrigspmapview=mapview(tr_assignment_irrigsp,zcol="depth2_cat",layer.name = 'Recommended irrigations')
+tr_assignment_irrigspmapview
+
+ mapshot(tr_assignment_irrigspmapview, url = paste0(getwd(), "/figures/tr_assignment_irrigspmapview.html"),
+         file = paste0(getwd(), "/figures/tr_assignment_irrigspmapview.png"))
+
+
+```
+
+
+## Varieties
+
+
+```{r}
+library(rgdal)
+
+#1: HD2967 2: Local 3: PBW343 4: UP262 5: LOK1 6: PBW154 7: Kedar 8: SUPER303 9: PBW502 10: HD2733 11: HUW234 12: RR21 
+
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==1]="HD2967"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==2]="Local"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==3]="PBW343"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==4]="UP262"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==5]="LOK1"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==6]="PBW154"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==7]="Kedar"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==8]="SUPER303"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==9]="PBW502"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==10]="HD2733"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==11]="HUW234"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==12]="RR21"
+
+tr_assignment_varietysp= SpatialPointsDataFrame(cbind(tr_assignment_variety$O.largestPlotGPS.Longitude,tr_assignment_variety$O.largestPlotGPS.Latitude),data=tr_assignment_variety,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+tr_assignment_varietyspmapview=mapview(tr_assignment_varietysp,zcol="depth2_cat",layer.name = 'Recommended variety')
+tr_assignment_varietyspmapview
+
+
+
+
+
+```
+
+
+# Distributional comparisons
+
+## Weed management
+
+
+```{r}
+library(ggplot2)
+library(ggridges)
+library(reshape2)
+
+tau.multi_herb.forest=predict(multi_herb.forest, target.sample = "all",estimate.variance=TRUE)
+
+tau.multi_herb.forest=as.data.frame(tau.multi_herb.forest)
+
+
+tau.multi_herb.forest_X=data.frame(LDSestim_herb,tau.multi_herb.forest)
+
+
+# Ridges -------------------
+tau.multi_herb.forest_pred=tau.multi_herb.forest[,1:4]
+
+library(dplyr)
+tau.multi_herb.forest_pred=rename(tau.multi_herb.forest_pred,"Manual-No weeding"="predictions.Manual...No.weeding.Y.1")
+
+tau.multi_herb.forest_pred=rename(tau.multi_herb.forest_pred,"Manual_herb-No weeding"="predictions.Manual_herb...No.weeding.Y.1")
+
+tau.multi_herb.forest_pred=rename(tau.multi_herb.forest_pred,"2,4-D -No weeding"="predictions.2.4.D...No.weeding.Y.1")
+
+tau.multi_herb.forest_pred=rename(tau.multi_herb.forest_pred,"SulfosulfuronMetsulfuron-No weeding"="predictions.SulfosulfuronMetsulfuron...No.weeding.Y.1")
+
+
+tau.multi_herb.forest_pred_long=melt(tau.multi_herb.forest_pred[,1:4])
+
+ggplot(tau.multi_herb.forest_pred_long, aes(x=value, y=variable, fill = factor(stat(quantile)))) +
+  stat_density_ridges(
+    geom = "density_ridges_gradient", calc_ecdf = TRUE,
+    quantiles = 4, quantile_lines = TRUE
+  ) +
+  scale_fill_viridis_d(name = "Quartiles")+
+  theme_bw(base_size = 16)+labs(x="Wheat yield gain(t/ha)",y="Weed management options")
+
+ggsave("figures/multi_weed_tau_dist.png")
+```
+
+
+## Sowing
+
+
+```{r}
+tau.multi_sowing.forest=predict(multi_sowing.forest, target.sample = "all",estimate.variance=TRUE)
+
+tau.multi_sowing.forest=as.data.frame(tau.multi_sowing.forest)
+
+
+tau.multi_sowing.forest_X=data.frame(LDSestim_sow,tau.multi_sowing.forest)
+
+
+# Ridges -------------------
+tau.multi_sowing.forest_pred=tau.multi_sowing.forest[,1:4]
+
+library(dplyr)
+tau.multi_sowing.forest_pred=rename(tau.multi_sowing.forest_pred,"T4_15Dec - T5_16Dec"="predictions.T4_15Dec...T5_16Dec.Y.1")
+
+tau.multi_sowing.forest_pred=rename(tau.multi_sowing.forest_pred,"T3_30Nov-T5_16Dec"="predictions.T3_30Nov...T5_16Dec.Y.1")
+
+tau.multi_sowing.forest_pred=rename(tau.multi_sowing.forest_pred,"T2_20Nov-T5_16Dec"="predictions.T2_20Nov...T5_16Dec.Y.1")
+
+tau.multi_sowing.forest_pred=rename(tau.multi_sowing.forest_pred,"T1_10Nov-T5_16Dec"="predictions.T1_10Nov...T5_16Dec.Y.1")
+
+
+tau.multi_sowing.forest_pred_long=melt(tau.multi_sowing.forest_pred[,1:4])
+
+ggplot(tau.multi_sowing.forest_pred_long, aes(x=value, y=variable, fill = factor(stat(quantile)))) +
+  stat_density_ridges(
+    geom = "density_ridges_gradient", calc_ecdf = TRUE,
+    quantiles = 4, quantile_lines = TRUE
+  ) +
+  scale_fill_viridis_d(name = "Quartiles")+
+  theme_bw(base_size = 16)+labs(x="Wheat yield gain(t/ha)",y="Sowing date options")
+
+ggsave("figures/multi_sowing_tau_dist.png")
+
+
+
+
+
+
+```
+
+
+## Irrigation
+
+
+```{r}
+tau.multi_irrig.forest=predict(multi_irrig.forest, target.sample = "all",estimate.variance=TRUE)
+
+tau.multi_irrig.forest=as.data.frame(tau.multi_irrig.forest)
+
+
+tau.multi_irrig.forest_X=data.frame(LDSestim_irrig,tau.multi_irrig.forest)
+
+
+# Ridges -------------------
+tau.multi_irrig.forest_pred=tau.multi_irrig.forest[,1:3]
+
+library(dplyr)
+tau.multi_irrig.forest_pred=rename(tau.multi_irrig.forest_pred,"Two-One"="predictions.Two...One.Y.1")
+
+tau.multi_irrig.forest_pred=rename(tau.multi_irrig.forest_pred,"Three-One"="predictions.Three...One.Y.1")
+
+tau.multi_irrig.forest_pred=rename(tau.multi_irrig.forest_pred,"Four-One"="predictions.Fourplus...One.Y.1")
+
+
+
+
+tau.multi_irrig.forest_pred_long=melt(tau.multi_irrig.forest_pred[,1:3])
+
+ggplot(tau.multi_irrig.forest_pred_long, aes(x=value, y=variable, fill = factor(stat(quantile)))) +
+  stat_density_ridges(
+    geom = "density_ridges_gradient", calc_ecdf = TRUE,
+    quantiles = 4, quantile_lines = TRUE
+  ) +
+  scale_fill_viridis_d(name = "Quartiles")+
+  theme_bw(base_size = 16)+labs(x="Wheat yield gain(t/ha)",y="Irrigation number")
+
+ggsave("figures/multi_irrig_tau_dist.png")
+
+
+
+
+
+
+```
+
+
+## Varieties
+
+
+```{r}
+
+tau.multi_variety.forest=predict(multi_variety.forest, target.sample = "all",estimate.variance=TRUE)
+
+tau.multi_variety.forest=as.data.frame(tau.multi_variety.forest)
+
+
+tau.multi_variety.forest_X=data.frame(LDSestim_variety,tau.multi_variety.forest)
+
+
+# Ridges -------------------
+tau.multi_variety.forest_pred=tau.multi_variety.forest[,1:11]
+
+library(dplyr)
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"Local-HD2967"="predictions.Local...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"PBW343-HD2967"="predictions.PBW343...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"UP262-HD2967"="predictions.UP262...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"LOK1-HD2967"="predictions.LOK1...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"PBW154-HD2967"="predictions.PBW154...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"Kedar-HD2967"="predictions.Kedar...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"SUPER303-HD2967"="predictions.SUPER303...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"PBW502-HD2967"="predictions.PBW502...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"HD2733-HD2967"="predictions.HD2733...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"HUW234-HD2967"="predictions.HUW234...HD2967.Y.1")
+
+tau.multi_variety.forest_pred=rename(tau.multi_variety.forest_pred,"RR21-HD2967"="predictions.RR21...HD2967.Y.1")
+
+tau.multi_variety.forest_pred_long=melt(tau.multi_variety.forest_pred[,1:11])
+
+ggplot(tau.multi_variety.forest_pred_long, aes(x=value, y=variable, fill = factor(stat(quantile)))) +
+  stat_density_ridges(
+    geom = "density_ridges_gradient", calc_ecdf = TRUE,
+    quantiles = 4, quantile_lines = TRUE
+  ) +
+  scale_fill_viridis_d(name = "Quartiles")+
+  theme_bw(base_size = 16)+labs(x="Wheat yield gain(t/ha)",y="Varieties")
+
+ggsave("figures/multi_variety_tau_dist.png")
+
+
+
+
+
+
+```
+
+
+# Simple maximum yield treatment assignment
+
+## Weed management
+Given the individual farm level yield gains to each of the sowing date categories, we can simply determine which of these gives the highest predicted yield gains for each farmer. To get these, we simply index the maximum sowing date. We then map this across space.
+
+
+```{r}
+library(rgdal)
+tau.multi_herb.forest_pred$max_yield_gain_name=colnames(tau.multi_herb.forest_pred)[max.col(tau.multi_herb.forest_pred)]
+
+tau.multi_herb.forest_pred$max_yield_gain_name[tau.multi_herb.forest_pred$max_yield_gain<0]="No weeding"
+
+table(tau.multi_herb.forest_pred$max_yield_gain_name)
+
+tau.multi_herb.forest_pred$max_yield_gain<- pmax(tau.multi_herb.forest_pred$`Manual-No weeding`,tau.multi_herb.forest_pred$`Manual_herb-No weeding`,tau.multi_herb.forest_pred$`2,4-D -No weeding`,tau.multi_herb.forest_pred$`SulfosulfuronMetsulfuron-No weeding`)
+
+simple_tr_assignment_herb=cbind(LDSestim_herb,tau.multi_herb.forest_pred)
+
+simple_tr_assignment_herbsp= SpatialPointsDataFrame(cbind(simple_tr_assignment_herb$O.largestPlotGPS.Longitude,simple_tr_assignment_herb$O.largestPlotGPS.Latitude),data=simple_tr_assignment_herb,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+simple_tr_assignment_herbspmapview=mapview(simple_tr_assignment_herbsp,zcol="max_yield_gain_name",layer.name="Recommended weed management")
+simple_tr_assignment_herbspmapview
+
+
+```
+
+
+## Sowing
+
+
+```{r}
+library(rgdal)
+tau.multi_sowing.forest_pred$max_yield_gain_name=colnames(tau.multi_sowing.forest_pred)[max.col(tau.multi_sowing.forest_pred)]
+
+table(tau.multi_sowing.forest_pred$max_yield_gain_name)
+
+tau.multi_sowing.forest_pred$max_yield_gain<- pmax(tau.multi_sowing.forest_pred$`T1_10Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T2_20Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T3_30Nov-T5_16Dec`,tau.multi_sowing.forest_pred$`T4_15Dec - T5_16Dec`)
+
+tau.multi_sowing.forest_pred$max_yield_gain_name[tau.multi_sowing.forest_pred$max_yield_gain<0]="T5"
+
+
+
+simple_tr_assignment_sowing=cbind(LDSestim_sow,tau.multi_sowing.forest_pred)
+
+simple_tr_assignment_sowingsp= SpatialPointsDataFrame(cbind(simple_tr_assignment_sowing$O.largestPlotGPS.Longitude,simple_tr_assignment_sowing$O.largestPlotGPS.Latitude),data=simple_tr_assignment_sowing,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+simple_tr_assignment_sowingspmapview=mapview(simple_tr_assignment_sowingsp,zcol="max_yield_gain_name",layer.name="Recommended sowing dates")
+simple_tr_assignment_sowingspmapview
+
+
+```
+
+
+### Yield gains to simple optimal choice
+
+
+```{r}
+
+simple_tr_assignment_sowingspmapview_yield=mapview(simple_tr_assignment_sowingsp,zcol="T1_10Nov-T5_16Dec",layer.name="Recommended sowing dates")
+simple_tr_assignment_sowingspmapview_yield
+```
+
+
+## Irrigation
+
+
+```{r}
+library(rgdal)
+tau.multi_irrig.forest_pred$max_yield_gain_name=colnames(tau.multi_irrig.forest_pred)[max.col(tau.multi_irrig.forest_pred)]
+
+table(tau.multi_irrig.forest_pred$max_yield_gain_name)
+
+tau.multi_irrig.forest_pred$max_yield_gain<- pmax(tau.multi_irrig.forest_pred$`Two-One`,tau.multi_irrig.forest_pred$`Three-One`,tau.multi_irrig.forest_pred$`Four-One`)
+
+tau.multi_irrig.forest_pred$max_yield_gain_name[tau.multi_irrig.forest_pred$max_yield_gain<0]="Three"
+
+tau.multi_irrig.forest_pred$max_yield_gain_name[tau.multi_irrig.forest_pred$max_yield_gain_name=="Four-One"]="Four"
+
+simple_tr_assignment_irrig=cbind(LDSestim_irrig,tau.multi_irrig.forest_pred)
+
+simple_tr_assignment_irrigsp= SpatialPointsDataFrame(cbind(simple_tr_assignment_irrig$O.largestPlotGPS.Longitude,simple_tr_assignment_irrig$O.largestPlotGPS.Latitude),data=simple_tr_assignment_irrig,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+simple_tr_assignment_irrigspmapview=mapview(simple_tr_assignment_irrigsp,zcol="max_yield_gain_name",layer.name="Recommended irrigation amounts")
+simple_tr_assignment_irrigspmapview
+
+
+```
+
+
+### Yield gains to simple optimal choice
+
+
+```{r}
+
+simple_tr_assignment_irrigspmapview_yield=mapview(simple_tr_assignment_irrigsp,zcol="max_yield_gain",layer.name="Recommended irrig dates")
+simple_tr_assignment_irrigspmapview_yield
+```
+
+
+## Varieties
+
+
+```{r}
+library(rgdal)
+tau.multi_variety.forest_pred$max_yield_gain_name=colnames(tau.multi_variety.forest_pred)[max.col(tau.multi_variety.forest_pred)]
+
+tau.multi_variety.forest_pred$max_yield_gain<- pmax(tau.multi_variety.forest_pred$`Local-HD2967`,tau.multi_variety.forest_pred$`PBW343-HD2967`,tau.multi_variety.forest_pred$`UP262-HD2967`,tau.multi_variety.forest_pred$`LOK1-HD2967`,tau.multi_variety.forest_pred$`PBW154-HD2967`,tau.multi_variety.forest_pred$`Kedar-HD2967`,tau.multi_variety.forest_pred$`SUPER303-HD2967`,tau.multi_variety.forest_pred$`PBW502-HD2967`,tau.multi_variety.forest_pred$`HD2733-HD2967`,tau.multi_variety.forest_pred$`HUW234-HD2967`)
+
+
+tau.multi_variety.forest_pred$max_yield_gain_name[tau.multi_variety.forest_pred$max_yield_gain<0]="HD-2967"
+
+tau.multi_variety.forest_pred$max_yield_gain_name[tau.multi_variety.forest_pred$max_yield_gain_name=="SUPER303-HD2967"]="SUPER303"
+table(tau.multi_variety.forest_pred$max_yield_gain_name)
+
+
+simple_tr_assignment_variety=cbind(LDSestim_variety,tau.multi_variety.forest_pred)
+
+simple_tr_assignment_varietysp= SpatialPointsDataFrame(cbind(simple_tr_assignment_variety$O.largestPlotGPS.Longitude,simple_tr_assignment_variety$O.largestPlotGPS.Latitude),data=simple_tr_assignment_variety,proj4string=CRS("+proj=longlat +datum=WGS84"))
+
+library(mapview)
+mapviewOptions(fgb = FALSE)
+simple_tr_assignment_varietyspmapview=mapview(simple_tr_assignment_varietysp,zcol="max_yield_gain_name",layer.name="Recommended variety")
+simple_tr_assignment_varietyspmapview
+
+
+```
+
+
+### Yield gains to simple optimal choice
+
+
+```{r}
+
+simple_tr_assignment_varietyspmapview_yield=mapview(simple_tr_assignment_varietysp,zcol="max_yield_gain",layer.name="Yield gain:SUPER 303-HD 2967")
+simple_tr_assignment_varietyspmapview_yield
+```
+
+
+
+# Status quo to optimal shares: Transitions
+
+
+```{r}
+library(rio)
+
+
+# tr_assignment_herb=import("D:/OneDrive/CIMMYT/Papers/IO5.3.1.CropResponseModels/WheatResponse/Policytree_Models/tables/tr_assignment_herb.csv")
+
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2 == 1] <- "No weeding"
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2 == 2] <- "Manual"
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2 == 3] <- "Manual+Herbicide"
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2 == 4] <- "2,4-D"
+tr_assignment_herb$depth2_cat[tr_assignment_herb$depth2 == 5] <- "SulfosulfuronMetsulfuron"
+
+library(ggalluvial)
+library(data.table)
+tr_assignment_herbDT = data.table(tr_assignment_herb)
+TransitionMatrix_herb = tr_assignment_herbDT[, (sum = .N), by = c("Herbicidename_cat", "depth2_cat")]
+library(dplyr)
+TransitionMatrix_herb=rename(TransitionMatrix_herb,Freq=V1)
+
+library(scales)
+transitionmatrixplot_herb=ggplot(data=TransitionMatrix_herb,
+       aes(axis1=Herbicidename_cat,axis2=depth2_cat, y=Freq))+
+       geom_alluvium(aes(fill=depth2_cat))+
+       geom_stratum()+
+      # geom_text(stat="stratum", aes(label=after_stat(stratum),nudge_y =5))+
+       geom_text(stat="stratum", aes(label=paste(after_stat(stratum),percent(after_stat(prop)))))+
+       scale_x_discrete(limits=c("Herbicidename_cat","depth2_cat"),
+                        expand=c(0.15,0.05))+
+       scale_fill_viridis_d()+
+       theme_void(base_size =20)+
+       theme(legend.position = "none")
+       
+transitionmatrixplot_herb
+
+ggsave("figures/transitionmatrixplot_herb.png",dpi=300)  
+
+# Sowing 
+
+library(rio)
+setwd("D:/OneDrive/CIMMYT/Papers/IO5.3.1.CropResponseModels/WheatResponse/Policytree_Models")
+# 
+# tr_assignment_sowing <- import("D:/OneDrive/CIMMYT/Papers/IO5.3.1.CropResponseModels/WheatResponse/Policytree_Models/tables/tr_assignment_sowing.csv")
+
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2 == 1] <- "T5_16Dec"
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2 == 2] <- "T4_15Dec"
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2 == 3] <- "T3_30Nov"
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2 == 4] <- "T2_20Nov"
+tr_assignment_sowing$depth2_cat[tr_assignment_sowing$depth2 == 5] <- "T1_10Nov"
+
+
+library(ggalluvial)
+library(data.table)
+tr_assignment_sowingDT = data.table(tr_assignment_sowing)
+TransitionMatrix_sowing <- tr_assignment_sowingDT[, (sum <- .N), by = c("Sowing_Date_Schedule", "depth2_cat")]
+library(dplyr)
+TransitionMatrix_sowing <- rename(TransitionMatrix_sowing, Freq = V1)
+
+library(scales)
+transitionmatrixplot_sowing <- ggplot(
+    data = TransitionMatrix_sowing,
+    aes(axis1 = Sowing_Date_Schedule, axis2 = depth2_cat, y = Freq)
+) +
+    geom_alluvium(aes(fill = depth2_cat)) +
+    geom_stratum() +
+    # geom_text(stat="stratum", aes(label=after_stat(stratum),nudge_y =5))+
+    geom_text(stat = "stratum", aes(label = paste(after_stat(stratum), percent(after_stat(prop))))) +
+    scale_x_discrete(
+        limits = c("Sowing_Date_Schedule", "depth2_cat"),
+        expand = c(0.15, 0.05)
+    ) +
+    scale_fill_viridis_d() +
+    theme_void(base_size = 20) +
+    theme(legend.position = "none")
+
+transitionmatrixplot_sowing
+
+ggsave("figures/transitionmatrixplot_sowing.png", dpi = 300)
+
+# Irrigation 
+library(rio)
+setwd("D:/OneDrive/CIMMYT/Papers/IO5.3.1.CropResponseModels/WheatResponse/Policytree_Models")
+
+# tr_assignment_irrig <- import("D:/OneDrive/CIMMYT/Papers/IO5.3.1.CropResponseModels/WheatResponse/Policytree_Models/tables/tr_assignment_irrig.csv")
+
+tr_assignment_irrig$depth2_cat[tr_assignment_irrig$depth2 == 1] <- "One"
+tr_assignment_irrig$depth2_cat[tr_assignment_irrig$depth2 == 2] <- "Two"
+tr_assignment_irrig$depth2_cat[tr_assignment_irrig$depth2 == 3] <- "Three"
+tr_assignment_irrig$depth2_cat[tr_assignment_irrig$depth2 == 4] <- "Fourplus"
+
+
+library(ggalluvial)
+library(data.table)
+tr_assignment_irrigDT <- data.table(tr_assignment_irrig)
+TransitionMatrix_irrig <- tr_assignment_irrigDT[, (sum <- .N), by = c("G.q5305_irrigTimes_cat", "depth2_cat")]
+library(dplyr)
+TransitionMatrix_irrig <- rename(TransitionMatrix_irrig, Freq = V1)
+
+library(scales)
+transitionmatrixplot_irrig <- ggplot(
+    data = TransitionMatrix_irrig,
+    aes(axis1 = G.q5305_irrigTimes_cat, axis2 = depth2_cat, y = Freq)
+) +
+    geom_alluvium(aes(fill = depth2_cat)) +
+    geom_stratum() +
+    # geom_text(stat="stratum", aes(label=after_stat(stratum),nudge_y =5))+
+    geom_text(stat = "stratum", aes(label = paste(after_stat(stratum), percent(after_stat(prop))))) +
+    scale_x_discrete(
+        limits = c("G.q5305_irrigTimes_cat", "depth2_cat"),
+        expand = c(0.15, 0.05)
+    ) +
+    scale_fill_viridis_d() +
+    theme_void(base_size = 20) +
+    theme(legend.position = "none")
+
+transitionmatrixplot_irrig
+
+ggsave("figures/transitionmatrixplot_irrig.png", dpi = 300)
+
+# Varieties
+
+library(rio)
+setwd("D:/OneDrive/CIMMYT/Papers/IO5.3.1.CropResponseModels/WheatResponse/Policytree_Models")
+
+# tr_assignment_variety <- import("D:/OneDrive/CIMMYT/Papers/IO5.3.1.CropResponseModels/WheatResponse/Policytree_Models/tables/tr_assignment_variety.csv")
+
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==1]="HD2967"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==2]="Local"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==3]="PBW343"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==4]="UP262"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==5]="LOK1"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==6]="PBW154"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==7]="Kedar"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==8]="SUPER303"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==9]="PBW502"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==10]="HD2733"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==11]="HUW234"
+tr_assignment_variety$depth2_cat[tr_assignment_variety$depth2==12]="RR21"
+
+library(ggalluvial)
+library(data.table)
+tr_assignment_varietyDT <- data.table(tr_assignment_variety)
+TransitionMatrix_variety <- tr_assignment_varietyDT[, (sum <- .N), by = c("D.q410_varName", "depth2_cat")]
+library(dplyr)
+TransitionMatrix_variety <- rename(TransitionMatrix_variety, Freq = V1)
+
+library(scales)
+transitionmatrixplot_variety <- ggplot(
+    data = TransitionMatrix_variety,
+    aes(axis1 = D.q410_varName, axis2 = depth2_cat, y = Freq)
+) +
+    geom_alluvium(aes(fill = depth2_cat)) +
+    geom_stratum() +
+    # geom_text(stat="stratum", aes(label=after_stat(stratum),nudge_y =5))+
+    geom_text(stat = "stratum", aes(label = paste(after_stat(stratum), percent(after_stat(prop))))) +
+    scale_x_discrete(
+        limits = c("D.q410_varName", "depth2_cat"),
+        expand = c(0.15, 0.05)
+    ) +
+    scale_fill_viridis_d() +
+    theme_void(base_size = 20) +
+    theme(legend.position = "none")
+
+transitionmatrixplot_variety
+
+ggsave("figures/transitionmatrixplot_variety.png", dpi = 300)
+
+
+```
+
+
+
+
+# Targeting with cost
+
+## Weed management
+
+
+```{r}
+
+library(policytree)
+
+DR.scores_herb_cost <- double_robust_scores(multi_herb.forest)
+
+DR.scores_herb_cost[, "No weeding"] <- DR.scores_herb_cost[, "No weeding"] - 0
+DR.scores_herb_cost[, "Manual"] <- DR.scores_herb_cost[, "Manual"] - 0.160
+DR.scores_herb_cost[, "Manual_herb"] <- DR.scores_herb_cost[, "Manual_herb"] - 0.183
+DR.scores_herb_cost[, "2,4-D"] <- DR.scores_herb_cost[, "2,4-D"] - 0.023
+DR.scores_herb_cost[, "SulfosulfuronMetsulfuron"] <- DR.scores_herb_cost[, "SulfosulfuronMetsulfuron"] - 0.035
+
+ tr_herb_cost <- policy_tree(X_cf_herb, DR.scores_herb, depth = 2)
+plot(tr_herb_cost)
+
+tr_assignment_herb_cost <- LDSestim_herb
+
+tr_assignment_herb_cost$depth2 <- predict(tr_herb_cost, X_cf_herb)
+table(tr_assignment_herb_cost$depth2)
+
+tr_assignment_herb_cost$depth2_cat[tr_assignment_herb_cost$depth2 == 1] <- "No weeding"
+tr_assignment_herb_cost$depth2_cat[tr_assignment_herb_cost$depth2 == 2] <- "Manual"
+tr_assignment_herb_cost$depth2_cat[tr_assignment_herb_cost$depth2 == 3] <- "Manual+Herbicide"
+tr_assignment_herb_cost$depth2_cat[tr_assignment_herb_cost$depth2 == 4] <- "2,4-D"
+tr_assignment_herb_cost$depth2_cat[tr_assignment_herb_cost$depth2 == 5] <- "SulfosulfuronMetsulfuron"
+
+library(ggalluvial)
+library(data.table)
+tr_assignment_herb_costDT = data.table(tr_assignment_herb_cost)
+TransitionMatrix_herb_cost <- tr_assignment_herb_costDT[, (sum <- .N), by = c("Herbicidename_cat", "depth2_cat")]
+library(dplyr)
+TransitionMatrix_herb_cost <- rename(TransitionMatrix_herb_cost, Freq = V1)
+
+library(scales)
+transitionmatrixplot_herb_cost <- ggplot(
+    data = TransitionMatrix_herb_cost,
+    aes(axis1 = Herbicidename_cat, axis2 = depth2_cat, y = Freq)
+) +
+    geom_alluvium(aes(fill = depth2_cat)) +
+    geom_stratum() +
+    # geom_text(stat="stratum", aes(label=after_stat(stratum),nudge_y =5))+
+   geom_text(stat = "stratum", aes(label = paste(after_stat(stratum), percent(after_stat(prop))))) +
+    scale_x_discrete(
+        limits = c("Herbicidename_cat", "depth2_cat"),
+        expand = c(0.15, 0.05)
+    ) +
+    scale_fill_viridis_d() +
+    theme_void(base_size = 20) +
+    theme(legend.position = "none")
+
+transitionmatrixplot_herb_cost
+
+ggsave("figures/transitionmatrixplot_herb_cost.png", dpi = 300)
+```
+
+
+## Irrigation
+
+
+```{r}
+library(policytree)
+
+DR.scores_irrig_cost <- double_robust_scores(multi_irrig.forest)
+
+DR.scores_irrig_cost[, "One"] <- DR.scores_irrig_cost[, "One"] - 0.08
+DR.scores_irrig_cost[, "Two"] <- DR.scores_irrig_cost[, "Two"] - 0.160
+DR.scores_irrig_cost[, "Three"] <- DR.scores_irrig_cost[, "Three"] - 0.240
+DR.scores_irrig_cost[, "Fourplus"] <- DR.scores_irrig_cost[, "Fourplus"] - 0.640
+
+
+tr_irrig_cost <- policy_tree(X_cf_irrig, DR.scores_irrig_cost, depth = 2)
+plot(tr_irrig_cost)
+
+tr_assignment_irrig_cost <- LDSestim_irrig
+
+tr_assignment_irrig_cost$depth2 <- predict(tr_irrig_cost, X_cf_irrig)
+table(tr_assignment_irrig_cost$depth2)
+
+tr_assignment_irrig_cost$depth2_cat[tr_assignment_irrig_cost$depth2 == 1] <- "One"
+tr_assignment_irrig_cost$depth2_cat[tr_assignment_irrig_cost$depth2 == 2] <- "Two"
+tr_assignment_irrig_cost$depth2_cat[tr_assignment_irrig_cost$depth2 == 3] <- "Three"
+tr_assignment_irrig_cost$depth2_cat[tr_assignment_irrig_cost$depth2 == 4] <- "Fourplus"
+
+library(ggalluvial)
+library(data.table)
+tr_assignment_irrig_costDT <- data.table(tr_assignment_irrig_cost)
+TransitionMatrix_irrig_cost <- tr_assignment_irrig_costDT[, (sum <- .N), by = c("G.q5305_irrigTimes_cat", "depth2_cat")]
+
+library(dplyr)
+TransitionMatrix_irrig_cost <- rename(TransitionMatrix_irrig_cost, Freq = V1)
+
+library(scales)
+transitionmatrixplot_irrig_cost <- ggplot(
+    data = TransitionMatrix_irrig_cost,
+    aes(axis1 = G.q5305_irrigTimes_cat, axis2 = depth2_cat, y = Freq)
+) +
+    geom_alluvium(aes(fill = depth2_cat)) +
+    geom_stratum() +
+    # geom_text(stat="stratum", aes(label=after_stat(stratum),nudge_y =5))+
+    geom_text(stat = "stratum", aes(label = paste(after_stat(stratum), percent(after_stat(prop))))) +
+    scale_x_discrete(
+        limits = c("G.q5305_irrigTimes_cat", "depth2_cat"),
+        expand = c(0.15, 0.05)
+    ) +
+    scale_fill_viridis_d() +
+    theme_void(base_size = 20) +
+    theme(legend.position = "none")
+
+transitionmatrixplot_irrig_cost
+
+ggsave("figures/transitionmatrixplot_irrig_cost.png", dpi = 300)
+
+
+
+```
+
+
+## Sowing
+
+
+```{r}
+
+
+
+
+```
+
+
+## Varieties
+
+For varieties, there are small differences in prices to warrant cost estimation
+
