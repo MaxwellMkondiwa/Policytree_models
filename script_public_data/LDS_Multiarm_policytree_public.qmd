@@ -758,6 +758,7 @@ table(tr_assignment_irrig$depth4)
 
 
 ```
+
 ## Binary causal RF calibration check
 
 The causal random forest results need to be checked for fit. However, there is no available algorithm to check this for the mult-arm causal RF. We therefore rely on the binary causal RF. Mean and differential forest prediction calibrations are used for such purposes. A coefficient of 1 for mean forest prediction suggests that the mean forest prediction is correct while a coefficient of 1 for differential forest prediction suggests that the forest has captured heterogeneity in the underlying signal (Tibshirani et al 2022). The following code fits the binary.
@@ -802,8 +803,6 @@ The causal random forest results need to be checked for fit. However, there is n
 # multi_irrig_binary_calibration=test_calibration(multi_irrig.forest_binary)
 # multi_irrig_binary_calibration
 ```
-
-
 
 # Varieties
 
@@ -924,8 +923,6 @@ library(DiagrammeRsvg)
 
 ```
 
-
-
 ## Binary causal RF calibration check
 
 The causal random forest results need to be checked for fit. However, there is no available algorithm to check this for the mult-arm causal RF. We therefore rely on the binary causal RF. Mean and differential forest prediction calibrations are used for such purposes. A coefficient of 1 for mean forest prediction suggests that the mean forest prediction is correct while a coefficient of 1 for differential forest prediction suggests that the forest has captured heterogeneity in the underlying signal (Tibshirani et al 2022). The following code fits the binary.
@@ -967,11 +964,6 @@ multi_variety_ate_binary
 multi_variety_binary_calibration=test_calibration(multi_variety.forest_binary)
 multi_variety_binary_calibration
 ```
-
-
-
-
-
 
 # Mapping and cross targeting
 
@@ -1275,6 +1267,7 @@ ggsave("figures/multi_variety_tau_dist.png")
 # Simple maximum yield treatment assignment
 
 ## Weed management
+
 Given the individual farm level yield gains to each of the sowing date categories, we can simply determine which of these gives the highest predicted yield gains for each farmer. To get these, we simply index the maximum sowing date. We then map this across space.
 
 ```{r}
@@ -1401,7 +1394,6 @@ simple_tr_assignment_varietyspmapview
 simple_tr_assignment_varietyspmapview_yield=mapview(simple_tr_assignment_varietysp,zcol="max_yield_gain",layer.name="Yield gain:SUPER 303-HD 2967")
 simple_tr_assignment_varietyspmapview_yield
 ```
-
 
 # Status quo to optimal shares: Transitions
 
@@ -1573,8 +1565,6 @@ ggsave("figures/transitionmatrixplot_variety.png", dpi = 300)
 
 
 ```
-
-
 
 # Targeting with cost
 
