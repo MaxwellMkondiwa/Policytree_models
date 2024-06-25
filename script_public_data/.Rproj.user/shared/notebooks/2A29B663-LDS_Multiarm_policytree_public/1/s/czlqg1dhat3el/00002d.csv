@@ -1,4 +1,0 @@
-"0","library(ggpubr)"
-"0","mean_comparison_all=ggarrange(WeedMgt_Options_Errorplot,SowingDate_Options_Errorplot,Irrigation_Options_Errorplot,Variety_Options_Errorplot, ncol = 2,nrow=2)"
-"0",""
-"0","mean_comparison_all"
