@@ -1,0 +1,18 @@
+,,,,Percentage advantage of depth 2 targeted policy over uniform policies,,,,
+Status Quo,Targeted treatment,N obs,%,Over no weeding,Over manual,Over manual+herbicides,"Over 2,4-D",Over Sulfosulfuron+Metsulfuron
+,,1,2,3,4,5,6,7
+No weeding ,Manual +Herbicides,228,7.24,5.09,2.20,0.00,-1.48,-3.45
+No weeding ,"2,4-D",390,12.38,16.33,3.88,2.40,0.00,-2.00
+No weeding ,SulfosulfuronMetsulfuron,263,8.35,-2.32,6.85,5.61,3.90,0.00
+Manual ,Manual +Herbicides,108,3.43,9.33,-1.94,0.00,-2.21,-4.41
+Manual ,"2,4-D",242,7.68,12.60,2.50,1.96,0.00,-2.97
+Manual ,SulfosulfuronMetsulfuron,359,11.40,16.01,-8.48,5.37,3.58,0.00
+Manual_herb ,Manual +Herbicides,33,1.05,-6.77,-11.87,0.00,-17.00,-18.98
+Manual_herb ,"2,4-D",63,2.00,12.29,3.63,-44.25,0.00,-3.33
+Manual_herb ,SulfosulfuronMetsulfuron,111,3.52,16.26,7.24,-41.16,3.27,0.00
+"2,4-D ",Manual +Herbicides,88,2.79,10.02,2.35,0.00,-11.29,-3.35
+"2,4-D ","2,4-D",307,9.75,-2.94,-8.87,-10.71,0.00,-15.87
+"2,4-D",SulfosulfuronMetsulfuron,469,14.89,15.71,6.93,5.56,1.74,0.00
+SulfosulfuronMetsulfuron ,Manual +Herbicides,81,2.57,9.67,1.72,0.00,-2.01,-1.98
+SulfosulfuronMetsulfuron ,"2,4-D",80,2.54,12.67,3.32,2.41,0.00,-18.31
+SulfosulfuronMetsulfuron ,SulfosulfuronMetsulfuron,328,10.41,16.08,6.02,5.71,2.61,0.00
